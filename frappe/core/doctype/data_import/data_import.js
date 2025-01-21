@@ -135,34 +135,29 @@ frappe.ui.form.on("Data Import", {
 				let failed_records = cint(r.message.failed);
 				let total_records = cint(r.message.total_records);
 
-				if (!total_records) return;
-				let action, message;
-				if (frm.doc.import_type === "Insert New Records") {
-					action = "imported";
-				} else {
-					action = "updated";
+				if (!total_records) {
+					return;
 				}
 
-				if (failed_records === 0) {
-					let message_args = [action, successful_records];
-					if (successful_records === 1) {
-						message = __("Successfully {0} 1 record.", message_args);
-					} else {
-						message = __("Successfully {0} {1} records.", message_args);
-					}
+				let message;
+				if (frm.doc.import_type === "Insert New Records") {
+					message = __("Successfully imported {0} out of {1} records.", [
+						successful_records,
+						total_records,
+					]);
 				} else {
-					let message_args = [action, successful_records, total_records];
-					if (successful_records === 1) {
-						message = __(
-							"Successfully {0} {1} record out of {2}. Click on Export Errored Rows, fix the errors and import again.",
-							message_args
+					message = __("Successfully updated {0} out of {1} records.", [
+						successful_records,
+						total_records,
+					]);
+				}
+
+				if (failed_records > 0) {
+					message +=
+						"<br/>" +
+						__(
+							"Please click on 'Export Errored Rows', fix the errors and import again."
 						);
-					} else {
-						message = __(
-							"Successfully {0} {1} records out of {2}. Click on Export Errored Rows, fix the errors and import again.",
-							message_args
-						);
-					}
 				}
 
 				// If the job timed out, display an extra hint
@@ -381,7 +376,7 @@ frappe.ui.form.on("Data Import", {
 		html += other_warnings
 			.map((warning) => {
 				let header = "";
-				if (warning.col) {
+				if (columns && warning.col) {
 					let column_number = `<span class="text-uppercase">${__("Column {0}", [
 						warning.col,
 					])}</span>`;
@@ -409,15 +404,9 @@ frappe.ui.form.on("Data Import", {
 
 	render_import_log(frm) {
 		frappe.call({
-			method: "frappe.client.get_list",
+			method: "frappe.core.doctype.data_import.data_import.get_import_logs",
 			args: {
-				doctype: "Data Import Log",
-				filters: {
-					data_import: frm.doc.name,
-				},
-				fields: ["success", "docname", "messages", "exception", "row_indexes"],
-				limit_page_length: 5000,
-				order_by: "log_index",
+				data_import: frm.doc.name,
 			},
 			callback: function (r) {
 				let logs = r.message;
@@ -506,15 +495,9 @@ frappe.ui.form.on("Data Import", {
 	},
 
 	show_import_log(frm) {
-		if (!frm.doc.show_failed_logs) {
-			frm.toggle_display("import_log_preview", false);
-			return;
-		}
-
 		frm.toggle_display("import_log_section", false);
-		frm.toggle_display("import_log_preview", true);
 
-		if (frm.import_in_progress) {
+		if (frm.is_new() || frm.import_in_progress) {
 			return;
 		}
 

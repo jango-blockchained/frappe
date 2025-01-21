@@ -2,12 +2,14 @@
 # License: MIT. See LICENSE
 import csv
 import json
+from csv import Sniffer
 from io import StringIO
 
 import requests
 
 import frappe
 from frappe import _, msgprint
+from frappe.core.doctype.file.file import FILE_ENCODING_OPTIONS
 from frappe.utils import cint, comma_or, cstr, flt
 
 
@@ -36,10 +38,10 @@ def read_csv_content_from_attached_file(doc):
 		)
 
 
-def read_csv_content(fcontent):
+def read_csv_content(fcontent, use_sniffer: bool = False):
 	if not isinstance(fcontent, str):
 		decoded = False
-		for encoding in ["utf-8", "windows-1250", "windows-1252"]:
+		for encoding in FILE_ENCODING_OPTIONS:
 			try:
 				fcontent = str(fcontent, encoding)
 				decoded = True
@@ -49,15 +51,38 @@ def read_csv_content(fcontent):
 
 		if not decoded:
 			frappe.msgprint(
-				_("Unknown file encoding. Tried utf-8, windows-1250, windows-1252."), raise_exception=True
+				_("Unknown file encoding. Tried to use: {0}").format(", ".join(FILE_ENCODING_OPTIONS)),
+				raise_exception=True,
 			)
 
 	fcontent = fcontent.encode("utf-8")
 	content = [frappe.safe_decode(line) for line in fcontent.splitlines(True)]
+	dialect = csv.get_dialect("excel")
+
+	if use_sniffer:
+		sniffer = Sniffer()
+		# Don't need to use whole csv, if more than 20 rows, use just first 20
+		sample_content = content[:20] if len(content) > 20 else content
+		# only testing for most common delimiter types, this later can be extended
+		# init default dialect, to avoid lint errors
+		try:
+			# csv by default uses excel dialect, which is not always correct
+			dialect = sniffer.sniff(
+				sample="\n".join(sample_content), delimiters=frappe.flags.delimiter_options
+			)
+		except csv.Error:
+			# if sniff fails, show alert on user interface. Fall back to use default dialect (excel)
+			frappe.msgprint(
+				_(
+					"Delimiter detection failed. Try to enable custom delimiters and adjust the delimiter options as per your data."
+				),
+				indicator="orange",
+				alert=True,
+			)
 
 	try:
 		rows = []
-		for row in csv.reader(content):
+		for row in csv.reader(content, dialect=dialect):
 			r = []
 			for val in row:
 				# decode everything
@@ -133,7 +158,9 @@ def check_record(d):
 			if docfield.fieldtype == "Select" and val and docfield.options:
 				if val not in docfield.options.split("\n"):
 					frappe.throw(
-						_("{0} must be one of {1}").format(_(docfield.label), comma_or(docfield.options.split("\n")))
+						_("{0} must be one of {1}").format(
+							_(docfield.label, context=docfield.parent), comma_or(docfield.options.split("\n"))
+						)
 					)
 
 			if val and docfield.fieldtype == "Date":
@@ -172,7 +199,7 @@ def import_doc(d, doctype, overwrite, row_idx, submit=False, ignore_links=False)
 
 
 def getlink(doctype, name):
-	return '<a href="/app/Form/%(doctype)s/%(name)s">%(name)s</a>' % locals()
+	return '<a href="/app/Form/{doctype}/{name}">{name}</a>'.format(**locals())
 
 
 def get_csv_content_from_google_sheets(url):

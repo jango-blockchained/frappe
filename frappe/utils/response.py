@@ -7,6 +7,8 @@ import json
 import mimetypes
 import os
 import sys
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -61,7 +63,7 @@ def report_error(status_code):
 
 
 def _link_error_with_message_log(error_log, exception, message_logs):
-	for message in message_logs:
+	for message in list(message_logs):
 		if message.get("__frappe_exc_id") == getattr(exception, "__frappe_exc_id", None):
 			error_log.update(message)
 			message_logs.remove(message)
@@ -205,7 +207,7 @@ def json_handler(obj):
 	from collections.abc import Iterable
 	from re import Match
 
-	if isinstance(obj, (datetime.date, datetime.datetime, datetime.time)):
+	if isinstance(obj, datetime.date | datetime.datetime | datetime.time):
 		return str(obj)
 
 	elif isinstance(obj, datetime.timedelta):
@@ -217,33 +219,39 @@ def json_handler(obj):
 	elif isinstance(obj, LocalProxy):
 		return str(obj)
 
-	elif isinstance(obj, frappe.model.document.BaseDocument):
-		return obj.as_dict(no_nulls=True)
+	elif hasattr(obj, "__json__"):
+		return obj.__json__()
+
 	elif isinstance(obj, Iterable):
 		return list(obj)
 
 	elif isinstance(obj, Match):
 		return obj.string
 
-	elif type(obj) == type or isinstance(obj, Exception):
+	elif type(obj) is type or isinstance(obj, Exception):
 		return repr(obj)
 
 	elif callable(obj):
 		return repr(obj)
 
+	elif isinstance(obj, uuid.UUID):
+		return str(obj)
+
+	elif isinstance(obj, Path):
+		return str(obj)
+
+	elif hasattr(obj, "__value__"):  # order imporant: defer to __json__ if implemented
+		return obj.__value__()
+
 	else:
-		raise TypeError(
-			f"""Object of type {type(obj)} with value of {repr(obj)} is not JSON serializable"""
-		)
+		raise TypeError(f"""Object of type {type(obj)} with value of {obj!r} is not JSON serializable""")
 
 
 def as_page():
 	"""print web page"""
 	from frappe.website.serve import get_response
 
-	return get_response(
-		frappe.response["route"], http_status_code=frappe.response.get("http_status_code")
-	)
+	return get_response(frappe.response["route"], http_status_code=frappe.response.get("http_status_code"))
 
 
 def redirect():
@@ -264,17 +272,13 @@ def download_backup(path):
 
 def download_private_file(path: str) -> Response:
 	"""Checks permissions and sends back private file"""
+	from frappe.core.doctype.file.utils import find_file_by_url
 
-	files = frappe.get_all("File", filters={"file_url": path}, fields="*")
-	# this file might be attached to multiple documents
-	# if the file is accessible from any one of those documents
-	# then it should be downloadable
-	for file_data in files:
-		file: "File" = frappe.get_doc(doctype="File", **file_data)
-		if file.is_downloadable():
-			break
+	if frappe.session.user == "Guest":
+		raise Forbidden(_("You don't have permission to access this file"))
 
-	else:
+	file = find_file_by_url(path, name=frappe.form_dict.fid)
+	if not file:
 		raise Forbidden(_("You don't have permission to access this file"))
 
 	make_access_log(doctype="File", document=file.name, file_type=os.path.splitext(path)[-1][1:])
@@ -289,6 +293,7 @@ def send_private_file(path: str) -> Response:
 		path = "/protected/" + path
 		response = Response()
 		response.headers["X-Accel-Redirect"] = quote(frappe.utils.encode(path))
+		response.headers["Cache-Control"] = "private,max-age=3600,stale-while-revalidate=86400"
 
 	else:
 		filepath = frappe.utils.get_site_path(path)

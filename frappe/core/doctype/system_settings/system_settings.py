@@ -32,10 +32,12 @@ class SystemSettings(Document):
 		bypass_2fa_for_retricted_ip_users: DF.Check
 		bypass_restrict_ip_check_if_2fa_enabled: DF.Check
 		country: DF.Link | None
+		currency: DF.Link | None
 		currency_precision: DF.Literal["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 		date_format: DF.Literal[
 			"yyyy-mm-dd", "dd-mm-yyyy", "dd/mm/yyyy", "dd.mm.yyyy", "mm/dd/yyyy", "mm-dd-yyyy"
 		]
+		default_app: DF.Literal[None]
 		deny_multiple_sessions: DF.Check
 		disable_change_log_notification: DF.Check
 		disable_document_sharing: DF.Check
@@ -58,9 +60,11 @@ class SystemSettings(Document):
 		float_precision: DF.Literal["", "2", "3", "4", "5", "6", "7", "8", "9"]
 		force_user_to_reset_password: DF.Int
 		force_web_capture_mode_for_uploads: DF.Check
+		hide_empty_read_only_fields: DF.Check
 		hide_footer_in_auto_email_reports: DF.Check
 		language: DF.Link
 		lifespan_qrcode_image: DF.Int
+		link_field_results_limit: DF.Int
 		login_with_email_link: DF.Check
 		login_with_email_link_expiry: DF.Int
 		logout_on_password_reset: DF.Check
@@ -81,19 +85,21 @@ class SystemSettings(Document):
 		]
 		otp_issuer_name: DF.Data | None
 		password_reset_limit: DF.Int
+		rate_limit_email_link_login: DF.Int
 		reset_password_link_expiry_duration: DF.Duration | None
 		reset_password_template: DF.Link | None
-		rounding_method: DF.Literal[
-			"Banker's Rounding (legacy)", "Banker's Rounding", "Commercial Rounding"
-		]
+		rounding_method: DF.Literal["Banker's Rounding (legacy)", "Banker's Rounding", "Commercial Rounding"]
 		session_expiry: DF.Data | None
 		setup_complete: DF.Check
+		store_attached_pdf_document: DF.Check
 		strip_exif_metadata_from_uploaded_images: DF.Check
 		time_format: DF.Literal["HH:mm:ss", "HH:mm"]
-		time_zone: DF.Literal
+		time_zone: DF.Literal[None]
 		two_factor_method: DF.Literal["OTP App", "SMS", "Email"]
+		use_number_format_from_currency: DF.Check
 		welcome_email_template: DF.Link | None
 	# end: auto-generated types
+
 	def validate(self):
 		from frappe.twofactor import toggle_two_factor_auth
 
@@ -130,15 +136,23 @@ class SystemSettings(Document):
 		self.validate_backup_limit()
 		self.validate_file_extensions()
 
+		if not self.link_field_results_limit:
+			self.link_field_results_limit = 10
+
+		if self.link_field_results_limit > 50:
+			self.link_field_results_limit = 50
+			label = _(self.meta.get_label("link_field_results_limit"))
+			frappe.msgprint(
+				_("{0} can not be more than {1}").format(label, 50), alert=True, indicator="yellow"
+			)
+
 	def validate_user_pass_login(self):
 		if not self.disable_user_pass_login:
 			return
 
 		social_login_enabled = frappe.db.exists("Social Login Key", {"enable_social_login": 1})
 		ldap_enabled = frappe.db.get_single_value("LDAP Settings", "enabled")
-		login_with_email_link_enabled = frappe.db.get_single_value(
-			"System Settings", "login_with_email_link"
-		)
+		login_with_email_link_enabled = frappe.db.get_single_value("System Settings", "login_with_email_link")
 
 		if not (social_login_enabled or ldap_enabled or login_with_email_link_enabled):
 			frappe.throw(
@@ -162,9 +176,7 @@ class SystemSettings(Document):
 
 	def on_update(self):
 		self.set_defaults()
-
-		frappe.cache.delete_value("system_settings")
-		frappe.cache.delete_value("time_zone")
+		clear_system_settings_cache()
 
 		if frappe.flags.update_last_reset_password_date:
 			update_last_reset_password_date()
@@ -206,3 +218,25 @@ def load():
 			defaults[df.fieldname] = all_defaults.get(df.fieldname)
 
 	return {"timezones": get_all_timezones(), "defaults": defaults}
+
+
+cache_key = frappe.get_document_cache_key("System Settings", "System Settings")
+
+
+def get_system_settings(key: str):
+	"""Return the value associated with the given `key` from System Settings DocType."""
+	if not (system_settings := getattr(frappe.local, "system_settings", None)):
+		try:
+			system_settings = frappe.client_cache.get_doc("System Settings")
+			frappe.local.system_settings = system_settings
+		except frappe.DoesNotExistError:  # possible during new install
+			frappe.clear_last_message()
+			return
+
+	return system_settings.get(key)
+
+
+def clear_system_settings_cache():
+	frappe.client_cache.delete_value(cache_key)
+	frappe.cache.delete_value("system_settings")
+	frappe.cache.delete_value("time_zone")

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.website.doctype.personal_data_deletion_request.personal_data_deletion_request import (
 	process_data_deletion_request,
 	remove_unverified_record,
@@ -13,7 +13,16 @@ from frappe.website.doctype.personal_data_download_request.test_personal_data_do
 )
 
 
-class TestPersonalDataDeletionRequest(FrappeTestCase):
+class UnitTestPersonalDataDeletionRequest(UnitTestCase):
+	"""
+	Unit tests for PersonalDataDeletionRequest.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestPersonalDataDeletionRequest(IntegrationTestCase):
 	def setUp(self):
 		create_user_if_not_exists(email="test_delete@example.com")
 		self.delete_request = frappe.get_doc(
@@ -49,9 +58,9 @@ class TestPersonalDataDeletionRequest(FrappeTestCase):
 		self.assertEqual(self.delete_request.status, "Deleted")
 
 	def test_unverified_record_removal(self):
-		date_time_obj = datetime.strptime(
-			self.delete_request.creation, "%Y-%m-%d %H:%M:%S.%f"
-		) + timedelta(days=-7)
+		date_time_obj = datetime.strptime(self.delete_request.creation, "%Y-%m-%d %H:%M:%S.%f") + timedelta(
+			days=-7
+		)
 		self.delete_request.db_set("creation", date_time_obj)
 		self.delete_request.db_set("status", "Pending Verification")
 
@@ -60,9 +69,9 @@ class TestPersonalDataDeletionRequest(FrappeTestCase):
 
 	def test_process_auto_request(self):
 		frappe.db.set_single_value("Website Settings", "auto_account_deletion", "1")
-		date_time_obj = datetime.strptime(
-			self.delete_request.creation, "%Y-%m-%d %H:%M:%S.%f"
-		) + timedelta(hours=-2)
+		date_time_obj = datetime.strptime(self.delete_request.creation, "%Y-%m-%d %H:%M:%S.%f") + timedelta(
+			hours=-2
+		)
 		self.delete_request.db_set("creation", date_time_obj)
 		self.delete_request.db_set("status", "Pending Approval")
 

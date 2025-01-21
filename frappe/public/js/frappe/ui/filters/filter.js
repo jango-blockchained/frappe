@@ -20,10 +20,10 @@ frappe.ui.Filter = class {
 			["in", __("In")],
 			["not in", __("Not In")],
 			["is", __("Is")],
-			[">", ">"],
-			["<", "<"],
-			[">=", ">="],
-			["<=", "<="],
+			[">", __("Greater Than")],
+			["<", __("Less Than")],
+			[">=", __("Greater Than Or Equal To")],
+			["<=", __("Less Than Or Equal To")],
 			["Between", __("Between")],
 			["Timespan", __("Timespan")],
 		];
@@ -55,6 +55,21 @@ frappe.ui.Filter = class {
 			Int: ["like", "not like", "Between", "in", "not in", "Timespan"],
 			Float: ["like", "not like", "Between", "in", "not in", "Timespan"],
 			Percent: ["like", "not like", "Between", "in", "not in", "Timespan"],
+		};
+
+		this.special_condition_labels = {
+			Date: {
+				"<": __("Before"),
+				">": __("After"),
+				"<=": __("On or Before"),
+				">=": __("On or After"),
+			},
+			Datetime: {
+				"<": __("Before"),
+				">": __("After"),
+				"<=": __("On or Before"),
+				">=": __("On or After"),
+			},
 		};
 	}
 
@@ -248,7 +263,7 @@ frappe.ui.Filter = class {
 			let args = {};
 			if (this.filters_config[condition].depends_on) {
 				const field_name = this.filters_config[condition].depends_on;
-				const filter_value = this.filter_list.get_filter_value(fieldname);
+				const filter_value = this.filter_list.get_filter_value(field_name);
 				args[field_name] = filter_value;
 			}
 			let setup_field = (field) => {
@@ -274,6 +289,7 @@ frappe.ui.Filter = class {
 	make_field(df, old_fieldtype) {
 		let old_text = this.field ? this.field.get_value() : null;
 		this.hide_invalid_conditions(df.fieldtype, df.original_type);
+		this.set_special_condition_labels(df.original_type);
 		this.toggle_nested_set_conditions(df);
 		let field_area = this.filter_edit_area.find(".filter-field").empty().get(0);
 		df.input_class = "input-xs";
@@ -398,6 +414,22 @@ frappe.ui.Filter = class {
 		}
 	}
 
+	set_special_condition_labels(original_type) {
+		let special_conditions = this.special_condition_labels[original_type] || {};
+		for (let condition of this.conditions) {
+			let special_label = special_conditions[condition[0]];
+			if (special_label) {
+				this.filter_edit_area
+					.find(`.condition option[value="${condition[0]}"]`)
+					.text(special_label);
+			} else {
+				this.filter_edit_area
+					.find(`.condition option[value="${condition[0]}"]`)
+					.text(__(condition[1]));
+			}
+		}
+	}
+
 	toggle_nested_set_conditions(df) {
 		let show_condition =
 			df.fieldtype === "Link" && frappe.boot.nested_set_doctypes.includes(df.options);
@@ -422,7 +454,13 @@ frappe.ui.filter_utils = {
 	get_selected_value(field, condition) {
 		if (!field) return;
 
-		let val = field.get_value() || field.value;
+		let val = field.get_value() ?? field.value;
+
+		if (!val && ["Link", "Dynamic Link"].includes(field.df.fieldtype)) {
+			// HACK: link field with show title are async so their input value is "" but they have
+			// some actual value set.
+			val = field.value;
+		}
 
 		if (typeof val === "string") {
 			val = strip(val);
@@ -478,6 +516,7 @@ frappe.ui.filter_utils = {
 
 		df.description = "";
 		df.reqd = 0;
+		df.length = 1000; // this won't be saved, no need to apply 140 character limit here
 		df.ignore_link_validation = true;
 
 		// given

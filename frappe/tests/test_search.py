@@ -5,23 +5,18 @@ import re
 from functools import partial
 
 import frappe
-from frappe.app import make_form_dict
 from frappe.desk.search import get_names_for_mentions, search_link, search_widget
-from frappe.tests.utils import FrappeTestCase
-from frappe.utils import set_request
-from frappe.website.serve import get_response
+from frappe.tests import IntegrationTestCase
 
 
-class TestSearch(FrappeTestCase):
+class TestSearch(IntegrationTestCase):
 	def setUp(self):
 		if self._testMethodName == "test_link_field_order":
 			setup_test_link_field_order(self)
 			self.addCleanup(teardown_test_link_field_order, self)
 
 	def test_search_field_sanitizer(self):
-		results = search_link(
-			"DocType", "User", query=None, filters=None, page_length=20, searchfield="name"
-		)
+		results = search_link("DocType", "User", query=None, filters=None, page_length=20, searchfield="name")
 		self.assertTrue("User" in results[0]["value"])
 
 		# raise exception on injection
@@ -120,12 +115,11 @@ class TestSearch(FrappeTestCase):
 			frappe.local.lang = "en"
 
 	def test_validate_and_sanitize_search_inputs(self):
-
 		# should raise error if searchfield is injectable
 		self.assertRaises(
 			frappe.DataError,
 			get_data,
-			*("User", "Random", "select * from tabSessions) --", "1", "10", dict())
+			*("User", "Random", "select * from tabSessions) --", "1", "10", dict()),
 		)
 
 		# page_len and start should be converted to int
@@ -168,6 +162,8 @@ class TestSearch(FrappeTestCase):
 		self.assertListEqual(results, [])
 
 	def test_search_relevance(self):
+		frappe.db.set_value("Language", {"name": ("like", "e%")}, "enabled", 1)
+
 		search = partial(search_link, doctype="Language", filters=None, page_length=10)
 		for row in search(txt="e"):
 			self.assertTrue(row["value"].startswith("e"))
@@ -179,6 +175,11 @@ class TestSearch(FrappeTestCase):
 		frappe.db.set_value("Language", "es", "idx", 10)
 		self.assertEqual("es", search(txt="es")[0]["value"])
 
+	def test_search_with_paren(self):
+		search = partial(search_link, doctype="Language", filters=None, page_length=10)
+		result = search(txt="(txt)")
+		self.assertEqual(result, [])
+
 
 @frappe.validate_and_sanitize_search_inputs
 def get_data(doctype, txt, searchfield, start, page_len, filters):
@@ -187,9 +188,7 @@ def get_data(doctype, txt, searchfield, start, page_len, filters):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def query_with_reference_doctype(
-	doctype, txt, searchfield, start, page_len, filters, reference_doctype=None
-):
+def query_with_reference_doctype(doctype, txt, searchfield, start, page_len, filters, reference_doctype=None):
 	return []
 
 
@@ -249,22 +248,3 @@ def teardown_test_link_field_order(TestCase):
 	)
 
 	TestCase.tree_doc.delete()
-
-
-class TestWebsiteSearch(FrappeTestCase):
-	def get(self, path, user="Guest"):
-		frappe.set_user(user)
-		set_request(method="GET", path=path)
-		make_form_dict(frappe.local.request)
-		response = get_response()
-		frappe.set_user("Administrator")
-		return response
-
-	def test_basic_search(self):
-
-		no_search = self.get("/search")
-		self.assertEqual(no_search.status_code, 200)
-
-		response = self.get("/search?q=b")
-		self.assertEqual(response.status_code, 200)
-		self.assertIn("Search Results", response.get_data(as_text=True))

@@ -130,6 +130,7 @@ def create_doctype(name, fields):
 			"doctype": "DocType",
 			"module": "Core",
 			"custom": 1,
+			"autoname": "autoincrement",
 			"fields": fields,
 			"permissions": [{"role": "System Manager", "read": 1}],
 			"name": name,
@@ -242,9 +243,7 @@ def create_web_page(title, route, single_thread):
 	web_page = frappe.db.exists("Web Page", {"route": route})
 	if web_page:
 		return web_page
-	web_page = frappe.get_doc(
-		{"doctype": "Web Page", "title": title, "route": route, "published": True}
-	)
+	web_page = frappe.get_doc({"doctype": "Web Page", "title": title, "route": route, "published": True})
 	web_page.save()
 
 	web_page.append(
@@ -401,7 +400,6 @@ def insert_translations():
 
 @whitelist_for_tests
 def create_blog_post():
-
 	blog_category = frappe.get_doc(
 		{"name": "general", "doctype": "Blog Category", "title": "general"}
 	).insert(ignore_if_duplicate=True)
@@ -451,6 +449,8 @@ def create_test_user(username=None):
 		user.append("roles", {"role": role})
 
 	user.save()
+
+	frappe.db.set_single_value("Workspace Settings", "workspace_setup_completed", 1)
 
 
 @whitelist_for_tests

@@ -17,6 +17,7 @@ def before_install():
 	frappe.reload_doc("desk", "doctype", "form_tour_step")
 	frappe.reload_doc("desk", "doctype", "form_tour")
 	frappe.reload_doc("core", "doctype", "doctype")
+	frappe.clear_cache()
 
 
 def after_install():
@@ -47,8 +48,9 @@ def after_install():
 			frappe.db.set_single_value("System Settings", "setup_complete", 0)
 
 	# clear test log
-	with open(frappe.get_site_path(".test_log"), "w") as f:
-		f.write("")
+	from frappe.tests.utils.generators import _after_install_clear_test_log
+
+	_after_install_clear_test_log()
 
 	add_standard_navbar_items()
 
@@ -142,18 +144,7 @@ def install_basic_docs():
 
 
 def get_admin_password():
-	def ask_admin_password():
-		admin_password = getpass.getpass("Set Administrator password: ")
-		admin_password2 = getpass.getpass("Re-enter Administrator password: ")
-		if admin_password != admin_password2:
-			print("\nPasswords do not match")
-			return ask_admin_password()
-		return admin_password
-
-	admin_password = frappe.conf.get("admin_password")
-	if not admin_password:
-		return ask_admin_password()
-	return admin_password
+	return frappe.conf.get("admin_password") or getpass.getpass("Set Administrator password: ")
 
 
 def before_tests():

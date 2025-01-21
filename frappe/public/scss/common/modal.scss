@@ -37,7 +37,7 @@ body.modal-open[style^="padding-right"] {
 		top: 0;
 		z-index: 3;
 		background: inherit;
-		padding: var(--padding-md) var(--padding-lg);
+		padding: var(--padding-sm) var(--padding-lg);
 		// padding-bottom: 0;
 		border-bottom: 1px solid var(--border-color);
 
@@ -48,11 +48,11 @@ body.modal-open[style^="padding-right"] {
 			max-width: calc(100% - 80px);
 		}
 
-		.modal-actions {
-			position: absolute;
-			top: 10px;
-			right: 5px;
+		.btn-modal-close {
+			padding: 4px 0;
+		}
 
+		.modal-actions {
 			.btn-modal-minimize {
 				padding-right: 0;
 
@@ -85,7 +85,8 @@ body.modal-open[style^="padding-right"] {
 		}
 	}
 
-	.awesomplete ul {
+	.awesomplete ul,
+	.awesomplete [role="listbox"] {
 		z-index: 2;
 	}
 
@@ -95,7 +96,6 @@ body.modal-open[style^="padding-right"] {
 		z-index: 1;
 		background: inherit;
 		padding: var(--padding-md) var(--padding-lg);
-		border-top: 1px solid var(--border-color);
 		justify-content: space-between;
 
 		button {
@@ -217,6 +217,7 @@ body.modal-open[style^="padding-right"] {
 
 .msgprint {
 	word-wrap: break-word;
+	padding: var(--padding-sm) 0;
 
 	pre {
 		text-align: left;
@@ -237,11 +238,14 @@ body.modal-open[style^="padding-right"] {
 			&[data-fieldname="sender"] {
 				margin-right: 10px;
 			}
+
 			flex: 1;
+			.control-input-wrapper {
+				width: 60%;
+			}
 		}
 		.frappe-control:last-child {
 			margin-left: 10px;
-			margin-bottom: -24px;
 			button {
 				// same as form-control input
 				height: calc(1.5em + 0.7rem);
@@ -260,10 +264,14 @@ body.modal-open[style^="padding-right"] {
 				margin-right: 10px;
 			}
 			flex: 1;
+
+			.control-input-wrapper {
+				width: 53%.6;
+			}
 		}
 
 		.frappe-control:last-child {
-			margin-bottom: -8px;
+			margin-top: -14px;
 		}
 	}
 }
@@ -303,5 +311,26 @@ body.modal-open[style^="padding-right"] {
 	}
 	.avatar {
 		margin-right: var(--margin-md);
+	}
+}
+
+// Stack minimized modals
+@for $i from 1 through 5 {
+	// 5n + 1, 5n + 2, ...
+	body > .modal:nth-child(5n + #{$i} of .show.modal-minimize) {
+		--minimized-modal-index: #{$i};
+	}
+}
+.modal-minimize ~ .modal-minimize {
+	.modal-dialog {
+		bottom: calc(44px * (var(--minimized-modal-index) - 1));
+	}
+	.modal-header {
+		border-bottom: 0px;
+	}
+	.modal-content {
+		// Rounded chip style
+		border-radius: var(--border-radius-md);
+		overflow: hidden;
 	}
 }

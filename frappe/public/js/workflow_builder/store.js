@@ -80,7 +80,7 @@ export const useStore = defineStore("workflow-builder-store", () => {
 			const workflow_data = clean_workflow_data();
 			doc.workflow_data = JSON.stringify(workflow_data);
 			await frappe.call("frappe.client.save", { doc });
-			frappe.toast("Workflow updated successfully");
+			frappe.toast(__("Workflow updated successfully"));
 			fetch();
 		} catch (e) {
 			console.error(e);
@@ -173,8 +173,18 @@ export const useStore = defineStore("workflow-builder-store", () => {
 
 		actions.forEach((action) => {
 			let states = workflow.value.elements.filter((e) => e.type == "state");
-			let state = states.find((state) => state.data.state == action.data.from);
-			let next_state = states.find((state) => state.data.state == action.data.to);
+
+			let state = states.find(
+				(state) => state.data.workflow_builder_id == action.data.from_id
+			);
+			let next_state = states.find(
+				(state) => state.data.workflow_builder_id == action.data.to_id
+			);
+
+			if (action.data.to.length === 0 && next_state != undefined) {
+				action.data.to = next_state.data.state;
+			}
+
 			let error = validate_transitions(state.data, next_state.data);
 			if (error) {
 				frappe.throw({

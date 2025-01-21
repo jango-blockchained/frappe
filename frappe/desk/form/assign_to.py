@@ -15,6 +15,7 @@ from frappe.desk.doctype.notification_log.notification_log import (
 	get_title_html,
 )
 from frappe.desk.form.document_follow import follow_document
+from frappe.utils import escape_html
 
 
 class DuplicateToDoError(frappe.ValidationError):
@@ -56,6 +57,10 @@ def add(args=None, *, ignore_permissions=False):
 	users_with_duplicate_todo = []
 	shared_with_users = []
 
+	description = escape_html(
+		args.get("description", _("Assignment for {0} {1}").format(args["doctype"], args["name"]))
+	)
+
 	for assign_to in frappe.parse_json(args.get("assign_to")):
 		filters = {
 			"reference_type": args["doctype"],
@@ -71,16 +76,13 @@ def add(args=None, *, ignore_permissions=False):
 		else:
 			from frappe.utils import nowdate
 
-			if not args.get("description"):
-				args["description"] = _("Assignment for {0} {1}").format(args["doctype"], args["name"])
-
 			d = frappe.get_doc(
 				{
 					"doctype": "ToDo",
 					"allocated_to": assign_to,
 					"reference_type": args["doctype"],
 					"reference_name": args["name"],
-					"description": args.get("description"),
+					"description": description,
 					"priority": args.get("priority", "Medium"),
 					"status": "Open",
 					"date": args.get("date", nowdate()),
@@ -98,7 +100,9 @@ def add(args=None, *, ignore_permissions=False):
 			# if assignee does not have permissions, share or inform
 			if not frappe.has_permission(doc=doc, user=assign_to):
 				if frappe.get_system_settings("disable_document_sharing"):
-					msg = _("User {0} is not permitted to access this document.").format(frappe.bold(assign_to))
+					msg = _("User {0} is not permitted to access this document.").format(
+						frappe.bold(assign_to)
+					)
 					msg += "<br>" + _(
 						"As document sharing is disabled, please give them the required permissions before assigning."
 					)
@@ -118,7 +122,7 @@ def add(args=None, *, ignore_permissions=False):
 				d.reference_type,
 				d.reference_name,
 				action="ASSIGN",
-				description=args.get("description"),
+				description=description,
 			)
 
 	if shared_with_users:
@@ -170,9 +174,7 @@ def close_all_assignments(doctype, name, ignore_permissions=False):
 
 @frappe.whitelist()
 def remove(doctype, name, assign_to, ignore_permissions=False):
-	return set_status(
-		doctype, name, "", assign_to, status="Cancelled", ignore_permissions=ignore_permissions
-	)
+	return set_status(doctype, name, "", assign_to, status="Cancelled", ignore_permissions=ignore_permissions)
 
 
 @frappe.whitelist()
@@ -194,14 +196,10 @@ def close(doctype: str, name: str, assign_to: str, ignore_permissions=False):
 	if assign_to != frappe.session.user:
 		frappe.throw(_("Only the assignee can complete this to-do."))
 
-	return set_status(
-		doctype, name, "", assign_to, status="Closed", ignore_permissions=ignore_permissions
-	)
+	return set_status(doctype, name, "", assign_to, status="Closed", ignore_permissions=ignore_permissions)
 
 
-def set_status(
-	doctype, name, todo=None, assign_to=None, status="Cancelled", ignore_permissions=False
-):
+def set_status(doctype, name, todo=None, assign_to=None, status="Cancelled", ignore_permissions=False):
 	"""remove from todo"""
 
 	if not ignore_permissions:
@@ -258,9 +256,7 @@ def clear(doctype, name, ignore_permissions=False):
 	return True
 
 
-def notify_assignment(
-	assigned_by, allocated_to, doc_type, doc_name, action="CLOSE", description=None
-):
+def notify_assignment(assigned_by, allocated_to, doc_type, doc_name, action="CLOSE", description=None):
 	"""
 	Notify assignee that there is a change in assignment
 	"""
@@ -279,9 +275,9 @@ def notify_assignment(
 	description_html = f"<div>{description}</div>" if description else None
 
 	if action == "CLOSE":
-		subject = _(
-			"Your assignment on {0} {1} has been removed by {2}", lang=assigned_user.language
-		).format(frappe.bold(_(doc_type)), get_title_html(title), frappe.bold(user_name))
+		subject = _("Your assignment on {0} {1} has been removed by {2}", lang=assigned_user.language).format(
+			frappe.bold(_(doc_type)), get_title_html(title), frappe.bold(user_name)
+		)
 	else:
 		user_name = frappe.bold(user_name)
 		document_type = frappe.bold(_(doc_type, lang=assigned_user.language))

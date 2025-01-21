@@ -66,7 +66,11 @@ function convert_old_to_new_number_format(v, old_number_format, new_number_forma
 	let old_group_regex = new RegExp(old_info.group_sep === "." ? "\\." : old_info.group_sep, "g");
 	v_before_decimal = v_before_decimal.replace(old_group_regex, new_info.group_sep);
 
-	v = v_before_decimal + new_info.decimal_str + v_after_decimal;
+	v = v_before_decimal;
+	if (v_after_decimal) {
+		v = v + new_info.decimal_str + v_after_decimal;
+	}
+
 	return v;
 }
 
@@ -173,8 +177,12 @@ function get_currency_symbol(currency) {
 }
 
 function get_number_format(currency) {
+	let sysdefaults = frappe?.boot?.sysdefaults;
 	return (
-		(frappe.boot && frappe.boot.sysdefaults && frappe.boot.sysdefaults.number_format) ||
+		(cint(sysdefaults?.use_number_format_from_currency) &&
+			currency &&
+			frappe.model.get_value(":Currency", currency, "number_format")) ||
+		sysdefaults.number_format ||
 		"#,###.##"
 	);
 }

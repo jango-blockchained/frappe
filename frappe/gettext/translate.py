@@ -118,8 +118,10 @@ def generate_pot(target_app: str | None = None):
 	:param target_app: If specified, limit to `app`
 	"""
 
+	is_gitignored = get_is_gitignored_function_for_app(target_app)
+
 	def directory_filter(dirpath: str | os.PathLike[str]) -> bool:
-		if "public/dist" in dirpath:
+		if is_gitignored(str(dirpath)):
 			return False
 
 		subdir = os.path.basename(dirpath)
@@ -132,7 +134,7 @@ def generate_pot(target_app: str | None = None):
 	keywords["_lt"] = None
 
 	for app in apps:
-		app_path = frappe.get_pymodule_path(app)
+		app_path = frappe.get_pymodule_path(app, "..")
 		catalog = new_catalog(app)
 
 		# Each file will only be processed by the first method that matches,
@@ -152,6 +154,27 @@ def generate_pot(target_app: str | None = None):
 		print(f"POT file created at {pot_path}")
 
 
+def get_is_gitignored_function_for_app(app: str | None):
+	"""
+	Used to check if a directory is gitignored or not.
+	Can NOT be used to check if a file is gitignored or not.
+	"""
+	import git
+
+	if not app:
+		return lambda d: "public/dist" in d
+
+	repo = git.Repo(frappe.get_app_source_path(app), search_parent_directories=True)
+
+	def _check_gitignore(d: str):
+		d = d.rstrip("/")
+		if repo.ignored([d]):  # type: ignore
+			return True
+		return False
+
+	return _check_gitignore
+
+
 def new_po(locale, target_app: str | None = None):
 	apps = [target_app] if target_app else frappe.get_all_apps(True)
 
@@ -167,7 +190,7 @@ def new_po(locale, target_app: str | None = None):
 
 		print(f"PO file created_at {po_path}")
 		print(
-			"You will need to add the language in frappe/geo/languages.json, if you haven't done it already."
+			"You will need to add the language in frappe/geo/languages.csv, if you haven't done it already."
 		)
 
 
@@ -218,7 +241,7 @@ def update_po(target_app: str | None = None, locale: str | None = None):
 		pot_catalog = get_catalog(app)
 		for locale in locales:
 			po_catalog = get_catalog(app, locale)
-			po_catalog.update(pot_catalog)
+			po_catalog.update(pot_catalog, no_fuzzy_matching=True)
 			po_path = write_catalog(app, po_catalog, locale)
 			print(f"PO file modified at {po_path}")
 
@@ -299,9 +322,6 @@ def get_translations_from_mo(lang, app):
 			if m.context:
 				context = m.context.decode()  # context is encoded as bytes
 				translations[f"{key}:{context}"] = m.string
-				if m.id not in translations:
-					# better a translation with context than no translation
-					translations[m.id] = m.string
 			else:
 				translations[m.id] = m.string
 	return translations

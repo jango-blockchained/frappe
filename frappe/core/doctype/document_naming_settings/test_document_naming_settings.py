@@ -7,11 +7,20 @@ from frappe.core.doctype.document_naming_settings.document_naming_settings impor
 	DocumentNamingSettings,
 )
 from frappe.model.naming import NamingSeries, get_default_naming_series
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import cint
 
 
-class TestNamingSeries(FrappeTestCase):
+class UnitTestDocumentNamingSettings(UnitTestCase):
+	"""
+	Unit tests for DocumentNamingSettings.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestNamingSeries(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
@@ -40,8 +49,8 @@ class TestNamingSeries(FrappeTestCase):
 
 	def get_valid_serieses(self):
 		VALID_SERIES = ["SINV-", "SI-.{field}.", "SI-#.###", ""]
-		exisiting_series = self.dns.get_transactions_and_prefixes()["prefixes"]
-		return VALID_SERIES + exisiting_series
+		existing_series = self.dns.get_transactions_and_prefixes()["prefixes"]
+		return VALID_SERIES + existing_series
 
 	def test_naming_preview(self):
 		self.dns.transaction_type = self.ns_doctype
@@ -54,7 +63,6 @@ class TestNamingSeries(FrappeTestCase):
 		serieses = self.dns.preview_series().split("\n")
 
 	def test_get_transactions(self):
-
 		naming_info = self.dns.get_transactions_and_prefixes()
 		self.assertIn(self.ns_doctype, naming_info["transactions"])
 
@@ -90,16 +98,12 @@ class TestNamingSeries(FrappeTestCase):
 		self.dns.update_amendment_rule()
 
 		submittable_doc = frappe.get_doc(
-			dict(doctype=self.ns_doctype, some_fieldname="test doc with submit")
+			doctype=self.ns_doctype, some_fieldname="test doc with submit"
 		).submit()
 		submittable_doc.cancel()
 
 		amended_doc = frappe.get_doc(
-			dict(
-				doctype=self.ns_doctype,
-				some_fieldname="test doc with submit",
-				amended_from=submittable_doc.name,
-			)
+			doctype=self.ns_doctype, some_fieldname="test doc with submit", amended_from=submittable_doc.name
 		).insert()
 
 		self.assertIn(submittable_doc.name, amended_doc.name)
@@ -109,10 +113,6 @@ class TestNamingSeries(FrappeTestCase):
 		self.dns.update_amendment_rule()
 
 		new_amended_doc = frappe.get_doc(
-			dict(
-				doctype=self.ns_doctype,
-				some_fieldname="test doc with submit",
-				amended_from=submittable_doc.name,
-			)
+			doctype=self.ns_doctype, some_fieldname="test doc with submit", amended_from=submittable_doc.name
 		).insert()
 		self.assertNotIn(submittable_doc.name, new_amended_doc.name)

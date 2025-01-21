@@ -148,7 +148,7 @@ class TemplatePage(BaseTemplatePage):
 
 	def setup_template_source(self):
 		"""Setup template source, frontmatter and markdown conversion"""
-		self.source = self.get_raw_template()
+		self.original_source = self.source = self.get_raw_template()
 		self.extract_frontmatter()
 		self.convert_from_markdown()
 
@@ -201,10 +201,8 @@ class TemplatePage(BaseTemplatePage):
 			and "{% extends" not in self.source
 			and "</body>" not in self.source
 		):
-			self.source = """{{% extends "{0}" %}}
-				{{% block page_content %}}{1}{{% endblock %}}""".format(
-				context.base_template, self.source
-			)
+			self.source = f"""{{% extends "{context.base_template}" %}}
+				{{% block page_content %}}{self.source}{{% endblock %}}"""
 
 		self.set_properties_via_comments()
 
@@ -235,7 +233,10 @@ class TemplatePage(BaseTemplatePage):
 			else:
 				safe_render = True
 
-			html = frappe.render_template(self.source, self.context, safe_render=safe_render)
+			src_modified = self.source is not self.original_source
+			html = frappe.render_template(
+				self.source if src_modified else self.context.template, self.context, safe_render=safe_render
+			)
 
 		return html
 

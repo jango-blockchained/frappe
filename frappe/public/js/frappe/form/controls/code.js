@@ -4,6 +4,43 @@ frappe.ui.form.ControlCode = class ControlCode extends frappe.ui.form.ControlTex
 		this.load_lib().then(() => this.make_ace_editor());
 	}
 
+	refresh() {
+		super.refresh();
+		if (this.df.fieldtype === "Code") {
+			// Don't show for derived classes
+			this.setup_copy_button();
+		}
+	}
+
+	setup_copy_button() {
+		if (this.get_status() === "Write") {
+			this.copy_button?.remove();
+			this.copy_button = null;
+			return; // Don't show copy button in write mode
+		}
+
+		if (this.copy_button) {
+			return;
+		}
+
+		this.copy_button = $(
+			`<button
+				class="btn icon-btn"
+				style="position: absolute; top: 32px; right: 5px;"
+				onmouseover="this.classList.add('btn-default')"
+				onmouseout="this.classList.remove('btn-default')"
+			>
+				<svg class="es-icon es-line  icon-sm" style="" aria-hidden="true">
+					<use class="" href="#es-line-copy-light"></use>
+				</svg>
+			</button>`
+		);
+		this.copy_button.on("click", () => {
+			frappe.utils.copy_to_clipboard(this.get_model_value() || this.get_value());
+		});
+		this.copy_button.appendTo(this.$wrapper);
+	}
+
 	make_ace_editor() {
 		if (this.editor) return;
 		this.ace_editor_target = $('<div class="ace-editor-target"></div>').appendTo(
@@ -28,7 +65,7 @@ frappe.ui.form.ControlCode = class ControlCode extends frappe.ui.form.ControlTex
 		} else {
 			this.expanded = false;
 			this.$expand_button = $(
-				`<button class="btn btn-xs btn-default">${this.get_button_label()}</button>`
+				`<button class="btn btn-xs btn-default mt-2">${this.get_button_label()}</button>`
 			)
 				.click(() => {
 					this.expanded = !this.expanded;
@@ -153,6 +190,7 @@ frappe.ui.form.ControlCode = class ControlCode extends frappe.ui.form.ControlTex
 			JS: "ace/mode/javascript",
 			Python: "ace/mode/python",
 			Py: "ace/mode/python",
+			PythonExpression: "ace/mode/python",
 			HTML: "ace/mode/html",
 			CSS: "ace/mode/css",
 			Markdown: "ace/mode/markdown",
@@ -176,7 +214,9 @@ frappe.ui.form.ControlCode = class ControlCode extends frappe.ui.form.ControlTex
 
 		const ace_language_mode = language_map[language] || "";
 		this.editor.session.setMode(ace_language_mode);
-		this.editor.setKeyboardHandler("ace/keyboard/vscode");
+		this.editor.setKeyboardHandler(
+			`ace/keyboard/${frappe.boot.user.code_editor_type || "vscode"}`
+		);
 	}
 
 	parse(value) {

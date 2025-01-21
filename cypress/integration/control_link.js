@@ -27,7 +27,7 @@ context("Control Link", () => {
 	}
 
 	function get_dialog_with_gender_link() {
-		return cy.dialog({
+		let dialog = cy.dialog({
 			title: "Link",
 			fields: [
 				{
@@ -38,6 +38,8 @@ context("Control Link", () => {
 				},
 			],
 		});
+		cy.wait(500);
+		return dialog;
 	}
 
 	it("should set the valid value", () => {
@@ -62,6 +64,7 @@ context("Control Link", () => {
 		cy.wait("@search_link");
 		cy.get("@input").type("todo for link", { delay: 200 });
 		cy.wait("@search_link");
+		cy.wait(500);
 		cy.get(".frappe-control[data-fieldname=link]").findByRole("listbox").should("be.visible");
 		cy.get(".frappe-control[data-fieldname=link] input").type("{enter}", { delay: 100 });
 		cy.get(".frappe-control[data-fieldname=link] input").blur();
@@ -82,6 +85,7 @@ context("Control Link", () => {
 			.type("invalid value", { delay: 100 })
 			.blur();
 		cy.wait("@validate_link");
+		cy.wait(500);
 		cy.get(".frappe-control[data-fieldname=link] input").should("have.value", "");
 	});
 
@@ -92,6 +96,7 @@ context("Control Link", () => {
 
 		cy.get(".frappe-control[data-fieldname=link] input").type("  ", { delay: 100 }).blur();
 		cy.wait("@validate_link");
+		cy.wait(500);
 		cy.get(".frappe-control[data-fieldname=link] input").should("have.value", "");
 		cy.window()
 			.its("cur_dialog")
@@ -100,7 +105,7 @@ context("Control Link", () => {
 			});
 	});
 
-	it("should route to form on arrow click", () => {
+	it("should show open link button", () => {
 		get_dialog_with_link().as("dialog");
 
 		cy.intercept("POST", "/api/method/frappe.client.validate_link").as("validate_link");
@@ -112,10 +117,10 @@ context("Control Link", () => {
 			cy.wait("@search_link");
 			cy.get("@input").type(todos[0]).blur();
 			cy.wait("@validate_link");
-			cy.get("@input").focus();
-			cy.wait(500); // wait for arrow to show
-			cy.get(".frappe-control[data-fieldname=link] .btn-open").should("be.visible").click();
-			cy.location("pathname").should("eq", `/app/todo/${todos[0]}`);
+			cy.get("@input").trigger("mouseover");
+			cy.get(".frappe-control[data-fieldname=link] .btn-open")
+				.should("be.visible")
+				.should("have.attr", "href", `/app/todo/${todos[0]}`);
 		});
 	});
 
@@ -262,6 +267,7 @@ context("Control Link", () => {
 			cy.wait("@search_link");
 			cy.get("@input").type("Sonstiges", { delay: 200 });
 			cy.wait("@search_link");
+			cy.wait(500);
 			cy.get(".frappe-control[data-fieldname=link] ul").should("be.visible");
 			cy.get(".frappe-control[data-fieldname=link] input").type("{enter}", { delay: 100 });
 			cy.get(".frappe-control[data-fieldname=link] input").blur();
@@ -284,7 +290,7 @@ context("Control Link", () => {
 			});
 
 		cy.clear_cache();
-		cy.wait(500);
+		cy.wait(1000);
 
 		get_dialog_with_gender_link().as("dialog");
 		cy.intercept("POST", "/api/method/frappe.desk.search.search_link").as("search_link");
@@ -293,6 +299,7 @@ context("Control Link", () => {
 		cy.wait("@search_link");
 		cy.get("@input").type("Non-Conforming", { delay: 200 });
 		cy.wait("@search_link");
+		cy.wait(500);
 		cy.get(".frappe-control[data-fieldname=link] ul").should("be.visible");
 		cy.get(".frappe-control[data-fieldname=link] input").type("{enter}", { delay: 100 });
 		cy.get(".frappe-control[data-fieldname=link] input").blur();

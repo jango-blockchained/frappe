@@ -27,9 +27,8 @@ def rename_field(doctype, old_fieldname, new_fieldname, validate=True):
 	if new_field.fieldtype in table_fields:
 		# change parentfield of table mentioned in options
 		frappe.db.sql(
-			"""update `tab%s` set parentfield=%s
-			where parentfield=%s"""
-			% (new_field.options.split("\n", 1)[0], "%s", "%s"),
+			"""update `tab{}` set parentfield={}
+			where parentfield={}""".format(new_field.options.split("\n", 1)[0], "%s", "%s"),
 			(new_fieldname, old_fieldname),
 		)
 
@@ -79,7 +78,7 @@ def update_reports(doctype, old_fieldname, new_fieldname):
 		"""select name, ref_doctype, json from tabReport
 		where report_type = 'Report Builder' and ifnull(is_standard, 'No') = 'No'
 		and json like %s and json like %s""",
-		("%%%s%%" % old_fieldname, "%%%s%%" % doctype),
+		("%{}%".format(old_fieldname), "%{}%".format(doctype)),
 		as_dict=True,
 	)
 
@@ -142,9 +141,8 @@ def update_users_report_view_settings(doctype, ref_fieldname, new_fieldname):
 
 		if columns_modified:
 			frappe.db.sql(
-				"""update `tabDefaultValue` set defvalue=%s
-				where defkey=%s"""
-				% ("%s", "%s"),
+				"""update `tabDefaultValue` set defvalue={}
+				where defkey={}""".format("%s", "%s"),
 				(json.dumps(new_columns), key),
 			)
 

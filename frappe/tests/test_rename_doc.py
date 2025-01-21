@@ -13,12 +13,12 @@ from frappe.exceptions import DoesNotExistError
 from frappe.model.base_document import get_controller
 from frappe.model.rename_doc import bulk_rename, update_document_title
 from frappe.modules.utils import get_doc_path
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_to_date, now
 
 
 @contextmanager
-def patch_db(endpoints: list[str] = None):
+def patch_db(endpoints: list[str] | None = None):
 	patched_endpoints = []
 
 	for point in endpoints:
@@ -37,7 +37,7 @@ def patch_db(endpoints: list[str] = None):
 		frappe.db.rollback(save_point=savepoint)
 
 
-class TestRenameDoc(FrappeTestCase):
+class TestRenameDoc(IntegrationTestCase):
 	@classmethod
 	def setUpClass(self):
 		"""Setting Up data for the tests defined under TestRenameDoc"""
@@ -136,9 +136,7 @@ class TestRenameDoc(FrappeTestCase):
 		second_todo_doc.priority = "High"
 		second_todo_doc.save()
 
-		merged_todo = frappe.rename_doc(
-			self.test_doctype, first_todo, second_todo, merge=True, force=True
-		)
+		merged_todo = frappe.rename_doc(self.test_doctype, first_todo, second_todo, merge=True, force=True)
 		merged_todo_doc = frappe.get_doc(self.test_doctype, merged_todo)
 		self.available_documents.remove(first_todo)
 
@@ -192,9 +190,7 @@ class TestRenameDoc(FrappeTestCase):
 		)
 
 		# Test if Doctype value has changed in Link field
-		linked_to_doctype = frappe.db.get_value(
-			"Renamed Doc", to_rename_record.name, "linked_to_doctype"
-		)
+		linked_to_doctype = frappe.db.get_value("Renamed Doc", to_rename_record.name, "linked_to_doctype")
 		self.assertEqual(linked_to_doctype, "Renamed Doc")
 
 		# Test if there are conflicts between a record and a DocType
@@ -283,3 +279,46 @@ class TestRenameDoc(FrappeTestCase):
 
 		self.assertEqual(len(parent_a_instance.test_table), 1)
 		self.assertEqual(len(parent_b_instance.test_table), 1)
+
+	def test_rename_autoincrement_doc(self):
+		if not frappe.db.exists("DocType", "Autoincrement DocType"):
+			new_doctype(
+				"Autoincrement DocType",
+				naming_rule="Autoincrement",
+				autoname="autoincrement",
+				fields=[
+					{
+						"label": "First Name",
+						"fieldname": "first_name",
+						"fieldtype": "Data",
+					}
+				],
+			).insert()
+
+		if not frappe.db.exists("DocType", "Autoincrement Linked DocType"):
+			new_doctype(
+				"Autoincrement Linked DocType",
+				fields=[
+					{
+						"label": "Autoincrement DocType",
+						"fieldname": "autoincrement_doctype",
+						"fieldtype": "Link",
+						"options": "Autoincrement DocType",
+					}
+				],
+			).insert()
+
+		# create records
+		mary = frappe.new_doc("Autoincrement DocType", first_name="Mary").insert()
+		marilyn = frappe.new_doc("Autoincrement DocType", first_name="Marilyn").insert()
+		linked_with_marilyn = frappe.new_doc(
+			"Autoincrement Linked DocType", autoincrement_doctype=marilyn.name
+		).insert()
+		self.assertEqual(marilyn.name, linked_with_marilyn.autoincrement_doctype)
+
+		# rename marilyn to mary
+		frappe.rename_doc("Autoincrement DocType", marilyn.name, mary.name, merge=True)
+		linked_with_marilyn.reload()
+
+		self.assertTrue(frappe.db.exists("Autoincrement DocType", marilyn.name) is None)
+		self.assertEqual(linked_with_marilyn.autoincrement_doctype, frappe.utils.cstr(mary.name))

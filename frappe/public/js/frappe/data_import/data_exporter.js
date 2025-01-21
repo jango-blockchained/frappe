@@ -67,14 +67,18 @@ frappe.data_import.DataExporter = class DataExporter {
 					columns: 2,
 					on_change: () => this.update_primary_action(),
 					options: this.get_multicheck_options(this.doctype),
+					sort_options: false,
 				},
 				...frappe.meta.get_table_fields(this.doctype).map((df) => {
 					let doctype = df.options;
 					let child_fieldname = df.fieldname;
 					let label = df.reqd
 						? // prettier-ignore
-						  __('{0} ({1}) (1 row mandatory)', [__(df.label || df.fieldname), __(doctype)])
-						: __("{0} ({1})", [__(df.label || df.fieldname), __(doctype)]);
+						  __('{0} ({1}) (1 row mandatory)', [__(df.label || df.fieldname, null, df.parent), __(doctype)])
+						: __("{0} ({1})", [
+								__(df.label || df.fieldname, null, df.parent),
+								__(doctype),
+						  ]);
 					return {
 						label,
 						fieldname: child_fieldname,
@@ -291,7 +295,7 @@ frappe.data_import.DataExporter = class DataExporter {
 			})
 			.map((df) => {
 				return {
-					label: __(df.label),
+					label: __(df.label, null, df.parent),
 					value: df.fieldname,
 					danger: is_field_mandatory(df),
 					checked: false,

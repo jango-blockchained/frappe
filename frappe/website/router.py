@@ -1,7 +1,6 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
-import io
 import os
 import re
 
@@ -71,12 +70,10 @@ def evaluate_dynamic_routes(rules, path):
 		urls = route_map.bind_to_environ(frappe.local.request.environ)
 		try:
 			endpoint, args = urls.match("/" + path)
-			path = endpoint
 			if args:
 				# don't cache when there's a query string!
 				frappe.local.no_cache = 1
 				frappe.local.form_dict.update(args)
-
 		except NotFound:
 			pass
 
@@ -92,7 +89,7 @@ def get_pages(app=None):
 		if app:
 			apps = [app]
 		else:
-			apps = frappe.local.flags.web_pages_apps or frappe.get_installed_apps()
+			apps = frappe.get_installed_apps()
 
 		for app in apps:
 			app_path = frappe.get_app_path(app)
@@ -109,11 +106,7 @@ def get_pages_from_path(start, app, app_path):
 	pages = {}
 	start_path = os.path.join(app_path, start)
 	if os.path.exists(start_path):
-		for basepath, folders, files in os.walk(start_path):
-			# add missing __init__.py
-			if "__init__.py" not in files and frappe.conf.get("developer_mode"):
-				open(os.path.join(basepath, "__init__.py"), "a").close()
-
+		for basepath, folders, files in os.walk(start_path):  # noqa: B007
 			for fname in files:
 				fname = frappe.utils.cstr(fname)
 				if "." not in fname:
@@ -128,7 +121,6 @@ def get_pages_from_path(start, app, app_path):
 						os.path.join(basepath, fname), app, start, basepath, app_path, fname
 					)
 					pages[page_info.route] = page_info
-					# print frappe.as_json(pages[-1])
 
 	return pages
 
@@ -322,7 +314,10 @@ def clear_routing_cache():
 	from frappe.website.doctype.web_form.web_form import get_published_web_forms
 	from frappe.website.doctype.web_page.web_page import get_dynamic_web_pages
 	from frappe.website.page_renderers.document_page import _find_matching_document_webview
+	from frappe.www.sitemap import get_public_pages_from_doctypes
 
 	_find_matching_document_webview.clear_cache()
 	get_dynamic_web_pages.clear_cache()
 	get_published_web_forms.clear_cache()
+	get_public_pages_from_doctypes.clear_cache()
+	frappe.cache.delete_value("home_page")

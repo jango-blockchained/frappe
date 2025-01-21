@@ -18,6 +18,7 @@ class Tag(Document):
 
 		description: DF.SmallText | None
 	# end: auto-generated types
+
 	pass
 
 
@@ -27,7 +28,7 @@ def check_user_tags(dt):
 		doctype = DocType(dt)
 		frappe.qb.from_(doctype).select(doctype._user_tags).limit(1).run()
 	except Exception as e:
-		if frappe.db.is_column_missing(e):
+		if frappe.db.is_missing_column(e):
 			DocTags(dt).setup()
 
 
@@ -117,7 +118,7 @@ class DocTags:
 			doc = frappe.get_doc(self.dt, dn)
 			update_tags(doc, tags)
 		except Exception as e:
-			if frappe.db.is_column_missing(e):
+			if frappe.db.is_missing_column(e):
 				if not tags:
 					# no tags, nothing to do
 					return
@@ -173,9 +174,7 @@ def update_tags(doc, tags):
 
 	deleted_tags = list(set(existing_tags) - set(new_tags))
 	for tag in deleted_tags:
-		frappe.db.delete(
-			"Tag Link", {"document_type": doc.doctype, "document_name": doc.name, "tag": tag}
-		)
+		frappe.db.delete("Tag Link", {"document_type": doc.doctype, "document_name": doc.name, "tag": tag})
 
 
 @frappe.whitelist()

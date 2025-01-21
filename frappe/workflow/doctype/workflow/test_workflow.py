@@ -1,5 +1,7 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
+from unittest.mock import patch
+
 import frappe
 from frappe.model.workflow import (
 	WorkflowTransitionError,
@@ -7,49 +9,36 @@ from frappe.model.workflow import (
 	get_common_transition_actions,
 )
 from frappe.query_builder import DocType
-from frappe.test_runner import make_test_records
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.utils import make_test_records
 from frappe.utils import random_string
 
 
-class TestWorkflow(FrappeTestCase):
+class UnitTestWorkflow(UnitTestCase):
+	"""
+	Unit tests for Workflow.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestWorkflow(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
 		make_test_records("User")
 
 	def setUp(self):
+		self.patcher = patch("frappe.attach_print", return_value={})
+		self.patcher.start()
+		frappe.db.delete("Workflow Action")
 		self.workflow = create_todo_workflow()
-		frappe.set_user("Administrator")
-		if self._testMethodName == "test_if_workflow_actions_were_processed_using_user":
-			if not frappe.db.has_column("Workflow Action", "user"):
-				# mariadb would raise this statement would create an implicit commit
-				# if we do not commit before alter statement
-				# nosemgrep
-				frappe.db.commit()
-				frappe.db.multisql(
-					{
-						"mariadb": "ALTER TABLE `tabWorkflow Action` ADD COLUMN user varchar(140)",
-						"postgres": 'ALTER TABLE "tabWorkflow Action" ADD COLUMN "user" varchar(140)',
-					}
-				)
-				frappe.cache.delete_value("table_columns")
 
 	def tearDown(self):
+		frappe.set_user("Administrator")
+		self.patcher.stop()
 		frappe.delete_doc("Workflow", "Test ToDo")
-		if self._testMethodName == "test_if_workflow_actions_were_processed_using_user":
-			if frappe.db.has_column("Workflow Action", "user"):
-				# mariadb would raise this statement would create an implicit commit
-				# if we do not commit before alter statement
-				# nosemgrep
-				frappe.db.commit()
-				frappe.db.multisql(
-					{
-						"mariadb": "ALTER TABLE `tabWorkflow Action` DROP COLUMN user",
-						"postgres": 'ALTER TABLE "tabWorkflow Action" DROP COLUMN "user"',
-					}
-				)
-				frappe.cache.delete_value("table_columns")
 
 	def test_default_condition(self):
 		"""test default condition is set"""
@@ -108,7 +97,6 @@ class TestWorkflow(FrappeTestCase):
 		self.assertListEqual(actions, ["Review"])
 
 	def test_if_workflow_actions_were_processed_using_role(self):
-		frappe.db.delete("Workflow Action")
 		user = frappe.get_doc("User", "test2@example.com")
 		user.add_roles("Test Approver", "System Manager")
 		frappe.set_user("test2@example.com")
@@ -120,35 +108,9 @@ class TestWorkflow(FrappeTestCase):
 		# test if status of workflow actions are updated on approval
 		self.test_approve(doc)
 		user.remove_roles("Test Approver", "System Manager")
-		workflow_actions = frappe.get_all("Workflow Action", fields=["status"])
-		self.assertEqual(len(workflow_actions), 1)
-		self.assertEqual(workflow_actions[0].status, "Completed")
-		frappe.set_user("Administrator")
-
-	def test_if_workflow_actions_were_processed_using_user(self):
-		frappe.db.delete("Workflow Action")
-
-		user = frappe.get_doc("User", "test2@example.com")
-		user.add_roles("Test Approver", "System Manager")
-		frappe.set_user("test2@example.com")
-
-		doc = self.test_default_condition()
 		workflow_actions = frappe.get_all("Workflow Action", fields=["*"])
 		self.assertEqual(len(workflow_actions), 1)
-
-		# test if status of workflow actions are updated on approval
-		WorkflowAction = DocType("Workflow Action")
-		WorkflowActionPermittedRole = DocType("Workflow Action Permitted Role")
-		frappe.qb.update(WorkflowAction).set(WorkflowAction.user, "test2@example.com").run()
-		frappe.qb.update(WorkflowActionPermittedRole).set(WorkflowActionPermittedRole.role, "").run()
-
-		self.test_approve(doc)
-
-		user.remove_roles("Test Approver", "System Manager")
-		workflow_actions = frappe.get_all("Workflow Action", fields=["status"])
-		self.assertEqual(len(workflow_actions), 1)
 		self.assertEqual(workflow_actions[0].status, "Completed")
-		frappe.set_user("Administrator")
 
 	def test_if_workflow_set_on_action(self):
 		self.workflow._update_state_docstatus = True
@@ -183,7 +145,7 @@ def create_todo_workflow():
 	TEST_ROLE = "Test Approver"
 
 	if not frappe.db.exists("Role", TEST_ROLE):
-		frappe.get_doc(dict(doctype="Role", role_name=TEST_ROLE)).insert(ignore_if_duplicate=True)
+		frappe.get_doc(doctype="Role", role_name=TEST_ROLE).insert(ignore_if_duplicate=True)
 		if frappe.db.exists("User", UI_TEST_USER):
 			frappe.get_doc("User", UI_TEST_USER).add_roles(TEST_ROLE)
 
@@ -192,7 +154,7 @@ def create_todo_workflow():
 	workflow.document_type = "ToDo"
 	workflow.workflow_state_field = "workflow_state"
 	workflow.is_active = 1
-	workflow.send_email_alert = 0
+	workflow.send_email_alert = 1
 	workflow.append("states", dict(state="Pending", allow_edit="All"))
 	workflow.append(
 		"states",
@@ -221,9 +183,7 @@ def create_todo_workflow():
 	)
 	workflow.append(
 		"transitions",
-		dict(
-			state="Rejected", action="Review", next_state="Pending", allowed="All", allow_self_approval=1
-		),
+		dict(state="Rejected", action="Review", next_state="Pending", allowed="All", allow_self_approval=1),
 	)
 	workflow.insert(ignore_permissions=True)
 
@@ -231,4 +191,4 @@ def create_todo_workflow():
 
 
 def create_new_todo():
-	return frappe.get_doc(dict(doctype="ToDo", description="workflow " + random_string(10))).insert()
+	return frappe.get_doc(doctype="ToDo", description="workflow " + random_string(10)).insert()

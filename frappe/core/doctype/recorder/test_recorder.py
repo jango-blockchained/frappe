@@ -5,13 +5,24 @@ import re
 
 import frappe
 import frappe.recorder
-from frappe.core.doctype.recorder.recorder import serialize_request
+from frappe.core.doctype.recorder.recorder import _optimize_query, serialize_request
+from frappe.query_builder.utils import db_type_is
 from frappe.recorder import get as get_recorder_data
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.tests.test_query_builder import run_only_if
 from frappe.utils import set_request
 
 
-class TestRecorder(FrappeTestCase):
+class UnitTestRecorder(UnitTestCase):
+	"""
+	Unit tests for Recorder.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestRecorder(IntegrationTestCase):
 	def setUp(self):
 		self.start_recoder()
 
@@ -75,3 +86,20 @@ class TestRecorder(FrappeTestCase):
 		requests = frappe.get_all("Recorder")
 		request_doc = get_recorder_data(requests[0].name)
 		self.assertIsInstance(serialize_request(request_doc), dict)
+
+
+class TestQueryOptimization(IntegrationTestCase):
+	@run_only_if(db_type_is.MARIADB)
+	def test_query_optimizer(self):
+		suggested_index = _optimize_query(
+			"""select name from
+			`tabUser` u
+			join `tabHas Role` r
+			on r.parent = u.name
+			where email='xyz'
+			and creation > '2023'
+			and bio like '%xyz%'
+			"""
+		)
+		self.assertEqual(suggested_index.table, "tabUser")
+		self.assertEqual(suggested_index.column, "email")

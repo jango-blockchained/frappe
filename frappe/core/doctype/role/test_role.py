@@ -3,12 +3,19 @@
 
 import frappe
 from frappe.core.doctype.role.role import get_info_based_on_role
-from frappe.tests.utils import FrappeTestCase
-
-test_records = frappe.get_test_records("Role")
+from frappe.tests import IntegrationTestCase, UnitTestCase
 
 
-class TestUser(FrappeTestCase):
+class UnitTestRole(UnitTestCase):
+	"""
+	Unit tests for Role.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
+
+
+class TestUser(IntegrationTestCase):
 	def test_disable_role(self):
 		frappe.get_doc("User", "test@example.com").add_roles("_Test Role 3")
 
@@ -30,9 +37,9 @@ class TestUser(FrappeTestCase):
 		frappe.delete_doc_if_exists("User", "test-user-for-desk-access@example.com")
 		frappe.delete_doc_if_exists("Role", "desk-access-test")
 		user = frappe.get_doc(
-			dict(doctype="User", email="test-user-for-desk-access@example.com", first_name="test")
+			doctype="User", email="test-user-for-desk-access@example.com", first_name="test"
 		).insert()
-		role = frappe.get_doc(dict(doctype="Role", role_name="desk-access-test", desk_access=0)).insert()
+		role = frappe.get_doc(doctype="Role", role_name="desk-access-test", desk_access=0).insert()
 		user.add_roles(role.name)
 		user.save()
 		self.assertTrue(user.user_type == "Website User")
@@ -46,7 +53,6 @@ class TestUser(FrappeTestCase):
 		self.assertTrue(user.user_type == "Website User")
 
 	def test_get_users_by_role(self):
-
 		role = "System Manager"
 		sys_managers = get_info_based_on_role(role, field="name")
 

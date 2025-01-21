@@ -1,10 +1,15 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import base64
 import datetime
 import re
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
+from uuid import UUID
+
+import uuid_utils
 
 import frappe
 from frappe import _
@@ -18,7 +23,8 @@ if TYPE_CHECKING:
 
 
 NAMING_SERIES_PATTERN = re.compile(r"^[\w\- \/.#{}]+$", re.UNICODE)
-BRACED_PARAMS_PATTERN = re.compile(r"(\{[\w | #]+\})")
+BRACED_PARAMS_WORD_PATTERN = re.compile(r"(\{[\w]+\})")
+BRACED_PARAMS_HASH_PATTERN = re.compile(r"(\{[#]+\})")
 
 
 # Types that can be using in naming series fields
@@ -33,6 +39,10 @@ NAMING_SERIES_PART_TYPES = (
 
 
 class InvalidNamingSeriesError(frappe.ValidationError):
+	pass
+
+
+class InvalidUUIDValue(frappe.ValidationError):
 	pass
 
 
@@ -101,7 +111,7 @@ class NamingSeries:
 				# ignore B023: binding `count` is not necessary because
 				# function is evaluated immediately and it can not be done
 				# because of function signature requirement
-				return str(count).zfill(digits)  # noqa: B023
+				return str(count).zfill(digits)
 
 			generated_names.append(parse_naming_series(self.series, doc=doc, number_generator=fake_counter))
 		return generated_names
@@ -115,9 +125,7 @@ class NamingSeries:
 		if frappe.db.get_value("Series", prefix, "name", order_by="name") is None:
 			frappe.qb.into(Series).insert(prefix, 0).columns("name", "current").run()
 
-		(
-			frappe.qb.update(Series).set(Series.current, cint(new_count)).where(Series.name == prefix)
-		).run()
+		(frappe.qb.update(Series).set(Series.current, cint(new_count)).where(Series.name == prefix)).run()
 
 	def get_current_value(self) -> int:
 		prefix = self.get_prefix()
@@ -141,11 +149,23 @@ def set_new_name(doc):
 	meta = frappe.get_meta(doc.doctype)
 	autoname = meta.autoname or ""
 
-	if autoname.lower() != "prompt" and not frappe.flags.in_import:
+	if autoname.lower() not in ("prompt", "uuid") and not frappe.flags.in_import:
 		doc.name = None
 
 	if is_autoincremented(doc.doctype, meta):
 		doc.name = frappe.db.get_next_sequence_val(doc.doctype)
+		return
+
+	if meta.autoname == "UUID":
+		if not doc.name:
+			doc.name = str(uuid_utils.uuid7())
+		elif isinstance(doc.name, UUID | uuid_utils.UUID):
+			doc.name = str(doc.name)
+		elif isinstance(doc.name, str):  # validate
+			try:
+				UUID(doc.name)
+			except ValueError:
+				frappe.throw(_("Invalid value specified for UUID: {}").format(doc.name), InvalidUUIDValue)
 		return
 
 	if getattr(doc, "amended_from", None):
@@ -178,10 +198,7 @@ def is_autoincremented(doctype: str, meta: Optional["Meta"] = None) -> bool:
 	if not meta:
 		meta = frappe.get_meta(doctype)
 
-	if not getattr(meta, "issingle", False) and meta.autoname == "autoincrement":
-		return True
-
-	return False
+	return not getattr(meta, "issingle", False) and meta.autoname == "autoincrement"
 
 
 def set_name_from_naming_options(autoname, doc):
@@ -264,10 +281,33 @@ def make_autoname(key="", doctype="", doc="", *, ignore_validate=False):
 	                DE/09/01/00001 where 09 is the year, 01 is the month and 00001 is the series
 	"""
 	if key == "hash":
-		return frappe.generate_hash(length=10)
+		return _generate_random_string(10)
 
 	series = NamingSeries(key)
 	return series.generate_next_name(doc, ignore_validate=ignore_validate)
+
+
+def _get_timestamp_prefix():
+	ts = int(time.time() * 10)  # time in deciseconds
+	# we ~~don't need~~ can't get ordering over entire lifetime, so we wrap the time.
+	ts = ts % (32**4)
+	return base64.b32hexencode(ts.to_bytes(length=5, byteorder="big")).decode()[-4:].lower()
+
+
+def _generate_random_string(length=10):
+	"""Better version of frappe.generate_hash for naming.
+
+	This uses entire base32 instead of base16 used by generate_hash. So it has twice as many
+	characters and hence more likely to have shorter common prefixes. i.e. slighly faster comparisons and less conflicts.
+
+	Why not base36?
+	It's not in standard library else using all characters is probably better approach.
+	Why not base64?
+	MySQL is case-insensitive, we can't use both upper and lower case characters.
+	"""
+	from secrets import token_bytes as get_random_bytes
+
+	return base64.b32hexencode(get_random_bytes(length)).decode()[:length].lower()
 
 
 def parse_naming_series(
@@ -275,8 +315,8 @@ def parse_naming_series(
 	doctype=None,
 	doc: Optional["Document"] = None,
 	number_generator: Callable[[str, int], str] | None = None,
+	key: str | None = None,
 ) -> str:
-
 	"""Parse the naming series and get next name.
 
 	args:
@@ -303,7 +343,10 @@ def parse_naming_series(
 		if e.startswith("#"):
 			if not series_set:
 				digits = len(e)
-				part = number_generator(name, digits)
+				if key:
+					part = number_generator(key, digits)
+				else:
+					part = number_generator(name, digits)
 				series_set = True
 		elif e == "YY":
 			part = today.strftime("%y")
@@ -411,9 +454,7 @@ def revert_series_if_last(key, name, doc=None):
 
 	count = cint(name.replace(prefix, ""))
 	series = DocType("Series")
-	current = (
-		frappe.qb.from_(series).where(series.name == prefix).for_update().select("current")
-	).run()
+	current = (frappe.qb.from_(series).where(series.name == prefix).for_update().select("current")).run()
 
 	if current and current[0][0] == count:
 		frappe.db.sql("UPDATE `tabSeries` SET `current` = `current` - 1 WHERE `name`=%s", prefix)
@@ -431,7 +472,6 @@ def get_default_naming_series(doctype: str) -> str | None:
 
 
 def validate_name(doctype: str, name: int | str):
-
 	if not name:
 		frappe.throw(_("No Name Specified for {0}").format(doctype))
 
@@ -456,9 +496,7 @@ def validate_name(doctype: str, name: int | str):
 	special_characters = "<>"
 	if re.findall(f"[{special_characters}]+", name):
 		message = ", ".join(f"'{c}'" for c in special_characters)
-		frappe.throw(
-			_("Name cannot contain special characters like {0}").format(message), frappe.NameError
-		)
+		frappe.throw(_("Name cannot contain special characters like {0}").format(message), frappe.NameError)
 
 	return name
 
@@ -473,12 +511,10 @@ def append_number_if_name_exists(doctype, value, fieldname="name", separator="-"
 
 	if exists:
 		last = frappe.db.sql(
-			"""SELECT `{fieldname}` FROM `tab{doctype}`
-			WHERE `{fieldname}` {regex_character} %s
+			f"""SELECT `{fieldname}` FROM `tab{doctype}`
+			WHERE `{fieldname}` {frappe.db.REGEX_CHARACTER} %s
 			ORDER BY length({fieldname}) DESC,
-			`{fieldname}` DESC LIMIT 1""".format(
-				doctype=doctype, fieldname=fieldname, regex_character=frappe.db.REGEX_CHARACTER
-			),
+			`{fieldname}` DESC LIMIT 1""",
 			regex,
 		)
 
@@ -544,11 +580,19 @@ def _format_autoname(autoname: str, doc):
 	first_colon_index = autoname.find(":")
 	autoname_value = autoname[first_colon_index + 1 :]
 
-	def get_param_value_for_match(match):
+	def get_param_value_for_word_match(match):
 		param = match.group()
 		return parse_naming_series([param[1:-1]], doc=doc)
 
-	# Replace braced params with their parsed value
-	name = BRACED_PARAMS_PATTERN.sub(get_param_value_for_match, autoname_value)
+	def get_param_value_for_hash_match(patterned_string: str):
+		def get_param_value(match):
+			param = match.group()
+			key = patterned_string[: patterned_string.find(param)]
 
-	return name
+			return parse_naming_series([param[1:-1]], doc=doc, key=key)
+
+		return get_param_value
+
+	# Replace braced params with their parsed value
+	autoname_value = BRACED_PARAMS_WORD_PATTERN.sub(get_param_value_for_word_match, autoname_value)
+	return BRACED_PARAMS_HASH_PATTERN.sub(get_param_value_for_hash_match(autoname_value), autoname_value)

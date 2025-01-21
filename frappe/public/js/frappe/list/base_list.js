@@ -45,6 +45,7 @@ frappe.views.BaseList = class BaseList {
 
 		this.start = 0;
 		this.page_length = frappe.is_large_screen() ? 100 : 20;
+		this.selected_page_count = this.page_length;
 		this.data = [];
 		this.method = "frappe.desk.reportview.get";
 
@@ -53,7 +54,7 @@ frappe.views.BaseList = class BaseList {
 
 		this.fields = [];
 		this.filters = [];
-		this.sort_by = this.meta.sort_field || "modified";
+		this.sort_by = this.meta.sort_field || "creation";
 		this.sort_order = this.meta.sort_order || "desc";
 
 		// Setup buttons
@@ -132,7 +133,9 @@ frappe.views.BaseList = class BaseList {
 			frappe.meta.has_field(doctype, fieldname) ||
 			fieldname === "_seen";
 
-		if (!is_valid_field) {
+		let is_virtual = this.meta.fields.find((df) => df.fieldname == fieldname)?.is_virtual;
+
+		if (!is_valid_field || is_virtual) {
 			return;
 		}
 
@@ -166,10 +169,9 @@ frappe.views.BaseList = class BaseList {
 	setup_page() {
 		this.page = this.parent.page;
 		this.$page = $(this.parent);
-		!this.hide_card_layout && this.page.main.addClass("frappe-card");
+		this.page.main.addClass("layout-main-list");
 		this.page.page_form.removeClass("row").addClass("flex");
 		this.hide_page_form && this.page.page_form.hide();
-		this.hide_sidebar && this.$page.addClass("no-list-sidebar");
 		this.setup_page_head();
 	}
 
@@ -180,30 +182,37 @@ frappe.views.BaseList = class BaseList {
 	}
 
 	set_title() {
-		this.page.set_title(this.page_title);
+		this.page.set_title(this.page_title, null, true, "", this.meta?.description);
 	}
 
 	setup_view_menu() {
-		// TODO: add all icons
-		const icon_map = {
-			Image: "image-view",
-			List: "list",
-			Report: "small-file",
-			Calendar: "calendar",
-			Gantt: "gantt",
-			Kanban: "kanban",
-			Dashboard: "dashboard",
-			Map: "map",
-		};
-
 		if (frappe.boot.desk_settings.view_switcher && !this.meta.force_re_route_to_default_view) {
-			/* @preserve
-			for translation, don't remove
-			__("List View") __("Report View") __("Dashboard View") __("Gantt View"),
-			__("Kanban View") __("Calendar View") __("Image View") __("Inbox View"),
-			__("Tree View") __("Map View") */
+			const icon_map = {
+				Image: "image-view",
+				List: "list",
+				Report: "small-file",
+				Calendar: "calendar",
+				Gantt: "gantt",
+				Kanban: "kanban",
+				Dashboard: "dashboard",
+				Map: "map",
+			};
+
+			const label_map = {
+				List: __("List View"),
+				Report: __("Report View"),
+				Dashboard: __("Dashboard View"),
+				Gantt: __("Gantt View"),
+				Kanban: __("Kanban View"),
+				Calendar: __("Calendar View"),
+				Image: __("Image View"),
+				Inbox: __("Inbox View"),
+				Tree: __("Tree View"),
+				Map: __("Map View"),
+			};
+
 			this.views_menu = this.page.add_custom_button_group(
-				__("{0} View", [this.view_name]),
+				label_map[this.view_name] || label_map["List"],
 				icon_map[this.view_name] || "list"
 			);
 			this.views_list = new frappe.views.ListViewSelect({
@@ -213,6 +222,7 @@ frappe.views.BaseList = class BaseList {
 				list_view: this,
 				sidebar: this.list_sidebar,
 				icon_map: icon_map,
+				label_map: label_map,
 			});
 		}
 	}
@@ -266,7 +276,10 @@ frappe.views.BaseList = class BaseList {
 	}
 
 	setup_side_bar() {
-		if (this.hide_sidebar || !frappe.boot.desk_settings.list_sidebar) return;
+		if (this.page.disable_sidebar_toggle) {
+			return;
+		}
+
 		this.list_sidebar = new frappe.views.ListSidebar({
 			doctype: this.doctype,
 			stats: this.stats,
@@ -360,7 +373,7 @@ frappe.views.BaseList = class BaseList {
 	}
 
 	setup_paging_area() {
-		const paging_values = [20, 100, 500];
+		const paging_values = [20, 100, 500, 2500];
 		this.$paging_area = $(
 			`<div class="list-paging-area level">
 				<div class="level-left">
@@ -389,23 +402,52 @@ frappe.views.BaseList = class BaseList {
 		// set default paging btn active
 		this.$paging_area
 			.find(`.btn-paging[data-value="${this.page_length}"]`)
-			.addClass("btn-info");
+			.addClass("btn-info")
+			.prop("disabled", true);
 
-		this.$paging_area.on("click", ".btn-paging, .btn-more", (e) => {
+		this.$paging_area.on("click", ".btn-paging", (e) => {
 			const $this = $(e.currentTarget);
+			// Set the active button
+			// This is always necessary because the current page length might
+			// have resulted from a previous "load more".
+			this.$paging_area.find(".btn-paging").removeClass("btn-info").prop("disabled", false);
+			$this.addClass("btn-info").prop("disabled", true);
 
-			if ($this.is(".btn-paging")) {
-				// set active button
-				this.$paging_area.find(".btn-paging").removeClass("btn-info");
-				$this.addClass("btn-info");
+			const old_page_length = this.page_length;
+			const new_page_length = $this.data().value;
 
+			this.selected_page_count = new_page_length;
+			if (this.page_length > new_page_length) {
 				this.start = 0;
-				this.page_length = this.selected_page_count = $this.data().value;
-			} else if ($this.is(".btn-more")) {
-				this.start = this.start + this.page_length;
-				this.page_length = this.selected_page_count || 20;
+				this.page_length = new_page_length;
+			} else {
+				this.start = this.page_length;
+				this.page_length = new_page_length - this.page_length;
 			}
+
+			if (old_page_length !== new_page_length) {
+				this.refresh();
+			}
+		});
+
+		this.$paging_area.on("click", ".btn-more", (e) => {
+			this.start = this.data.length;
+			this.page_length = this.selected_page_count;
 			this.refresh();
+		});
+	}
+
+	set_result_height() {
+		// place it at the footer of the page
+		this.$result.css({
+			height:
+				window.innerHeight -
+				this.$result.get(0).offsetTop -
+				this.$paging_area.get(0).offsetHeight +
+				"px",
+		});
+		this.$no_result.css({
+			height: window.innerHeight - this.$no_result.get(0).offsetTop + "px",
 		});
 	}
 
@@ -429,12 +471,9 @@ frappe.views.BaseList = class BaseList {
 	get_filter_value(fieldname) {
 		const filter = this.get_filters_for_args().filter((f) => f[1] == fieldname)[0];
 		if (!filter) return;
-		return (
-			{
-				like: filter[3]?.replace(/^%?|%$/g, ""),
-				"not set": null,
-			}[filter[2]] || filter[3]
-		);
+		if (filter[2] === "like") return filter[3]?.replace(/^%?|%$/g, "");
+		else if (filter[2] === "not set") return null;
+		else return filter[3];
 	}
 
 	get_filters_for_args() {
@@ -444,15 +483,22 @@ frappe.views.BaseList = class BaseList {
 	}
 
 	get_args() {
+		let filters = this.get_filters_for_args();
+		let group_by = this.get_group_by();
+		let group_by_required =
+			Array.isArray(filters) &&
+			filters.some((filter) => {
+				return filter[0] !== this.doctype;
+			});
 		return {
 			doctype: this.doctype,
 			fields: this.get_fields(),
-			filters: this.get_filters_for_args(),
+			filters,
 			order_by: this.sort_selector && this.sort_selector.get_sql_string(),
 			start: this.start,
 			page_length: this.page_length,
 			view: this.view,
-			group_by: this.get_group_by(),
+			group_by: group_by_required ? group_by : null,
 		};
 	}
 
@@ -486,6 +532,7 @@ frappe.views.BaseList = class BaseList {
 			this.before_render();
 			this.render();
 			this.after_render();
+			this.set_result_height();
 			this.freeze(false);
 			this.reset_defaults();
 			if (this.settings.refresh) {
@@ -551,8 +598,10 @@ frappe.views.BaseList = class BaseList {
 		this.$paging_area.toggle(this.data.length > 0);
 		this.$no_result.toggle(this.data.length == 0);
 
-		const show_more = this.start + this.page_length <= this.data.length;
-		this.$paging_area.find(".btn-more").toggle(show_more);
+		if (this.data.length) {
+			const show_more = this.start + this.page_length <= this.data.length;
+			this.$paging_area.find(".btn-more").toggle(show_more);
+		}
 	}
 
 	call_for_selected_items(method, args = {}) {
@@ -586,6 +635,11 @@ class FilterArea {
 
 		this.$filter_list_wrapper = this.list_view.$filter_section;
 		this.trigger_refresh = true;
+
+		this.debounced_refresh_list_view = frappe.utils.debounce(
+			this.refresh_list_view.bind(this),
+			300
+		);
 		this.setup();
 	}
 
@@ -732,29 +786,47 @@ class FilterArea {
 		}
 		return frappe.run_serially(promises).then(() => {
 			this.trigger_refresh = true;
+			if (promises.length === 0) {
+				// refresh if there are no standard fields
+				this.debounced_refresh_list_view();
+			}
 		});
 	}
 
-	make_standard_filters() {
+	async make_standard_filters() {
 		this.standard_filters_wrapper = this.list_view.page.page_form.find(
 			".standard-filter-section"
 		);
-		let fields = [
-			{
+		let fields = [];
+
+		if (!this.list_view.settings.hide_name_filter) {
+			fields.push({
 				fieldtype: "Data",
 				label: "ID",
 				condition: "like",
 				fieldname: "name",
-				onchange: () => this.refresh_list_view(),
-			},
-		];
-
-		if (this.list_view.custom_filter_configs) {
-			this.list_view.custom_filter_configs.forEach((config) => {
-				config.onchange = () => this.refresh_list_view();
+				onchange: () => this.debounced_refresh_list_view(),
 			});
+		}
 
-			fields = fields.concat(this.list_view.custom_filter_configs);
+		if (
+			this.list_view.custom_filter_configs ||
+			this.list_view.settings.custom_filter_configs
+		) {
+			const custom_filter_configs =
+				this.list_view.custom_filter_configs ||
+				this.list_view.settings.custom_filter_configs;
+			await Promise.resolve(
+				typeof custom_filter_configs === "function"
+					? custom_filter_configs()
+					: custom_filter_configs
+			).then((configs) => {
+				configs.forEach((config) => {
+					config.onchange = () => this.debounced_refresh_list_view();
+				});
+
+				fields = fields.concat(configs);
+			});
 		}
 
 		const doctype_fields = this.list_view.meta.fields;
@@ -804,11 +876,11 @@ class FilterArea {
 
 					return {
 						fieldtype: fieldtype,
-						label: __(df.label),
+						label: __(df.label, null, df.parent),
 						options: options,
 						fieldname: df.fieldname,
 						condition: condition,
-						onchange: () => this.refresh_list_view(),
+						onchange: () => this.debounced_refresh_list_view(),
 						ignore_link_validation: fieldtype === "Dynamic Link",
 						is_filter: 1,
 					};
@@ -846,7 +918,7 @@ class FilterArea {
 		$(`<div class="filter-selector">
 			<div class="btn-group">
 				<button class="btn btn-default btn-sm filter-button">
-					<span class="filter-icon">
+					<span class="filter-icon button-icon">
 						${frappe.utils.icon("es-line-filter")}
 					</span>
 					<span class="button-label hidden-xs">
@@ -854,7 +926,7 @@ class FilterArea {
 					<span>
 				</button>
 				<button class="btn btn-default btn-sm filter-x-button" title="${__("Clear all filters")}">
-					<span class="filter-icon">
+					<span class="filter-icon button-icon">
 						${frappe.utils.icon("es-small-close")}
 					</span>
 				</button>
@@ -870,7 +942,7 @@ class FilterArea {
 			filter_button: this.filter_button,
 			filter_x_button: this.filter_x_button,
 			default_filters: [],
-			on_change: () => this.refresh_list_view(),
+			on_change: () => this.debounced_refresh_list_view(),
 		});
 	}
 

@@ -9,11 +9,11 @@ import frappe
 from frappe.core.doctype.user.user import generate_keys
 from frappe.frappeclient import FrappeClient, FrappeException
 from frappe.model import default_fields
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils.data import get_url
 
 
-class TestFrappeClient(FrappeTestCase):
+class TestFrappeClient(IntegrationTestCase):
 	PASSWORD = frappe.conf.admin_password or "admin"
 
 	def test_insert_many(self):
@@ -74,9 +74,7 @@ class TestFrappeClient(FrappeTestCase):
 		server = FrappeClient(get_url(), "Administrator", self.PASSWORD, verify=False)
 		server.insert({"doctype": "Note", "title": "get_value", "content": CONTENT}).get("name")
 
-		self.assertEqual(
-			server.get_value("Note", "content", {"title": "get_value"}).get("content"), CONTENT
-		)
+		self.assertEqual(server.get_value("Note", "content", {"title": "get_value"}).get("content"), CONTENT)
 
 	def test_get_value_by_name(self):
 		server = FrappeClient(get_url(), "Administrator", self.PASSWORD, verify=False)

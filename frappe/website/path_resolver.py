@@ -1,6 +1,7 @@
 import re
 
 import click
+import werkzeug.routing.exceptions
 from werkzeug.routing import Rule
 
 import frappe
@@ -17,7 +18,7 @@ from frappe.website.utils import can_cache, get_home_page
 
 
 class PathResolver:
-	__slots__ = ("path", "http_status_code")
+	__slots__ = ("http_status_code", "path")
 
 	def __init__(self, path, http_status_code=None):
 		self.path = path.strip("/ ")
@@ -28,6 +29,10 @@ class PathResolver:
 		request = frappe._dict()
 		if hasattr(frappe.local, "request"):
 			request = frappe.local.request or request
+
+		# WARN: Hardcoded for better performance
+		if self.path == "app" or self.path.startswith("app/"):
+			return "app", TemplatePage("app", self.http_status_code)
 
 		# check if the request url is in 404 list
 		if request.url and can_cache() and frappe.cache.hget("website_404", request.url):
@@ -42,14 +47,15 @@ class PathResolver:
 			for handler in frappe.get_hooks("website_path_resolver"):
 				endpoint = frappe.get_attr(handler)(self.path)
 		else:
-			endpoint = resolve_path(self.path)
-
-		# WARN: Hardcoded for better performance
-		if endpoint == "app":
-			return endpoint, TemplatePage(endpoint, self.http_status_code)
+			try:
+				endpoint = resolve_path(self.path)
+			except werkzeug.routing.exceptions.RequestRedirect as e:
+				frappe.flags.redirect_location = e.new_url
+				return frappe.flags.redirect_location, RedirectPage(e.new_url, e.code)
 
 		custom_renderers = self.get_custom_page_renderers()
-		renderers = custom_renderers + [
+		renderers = [
+			*custom_renderers,
 			StaticPage,
 			WebFormPage,
 			DocumentPage,
@@ -108,6 +114,18 @@ def resolve_redirect(path, query_string=None):
 	                                # use r as a string prefix if you use regex groups or want to escape any string literal
 	                ]
 	"""
+
+	redirect_to = frappe.cache.hget("website_redirects", path or "/")
+	if redirect_to:
+		if isinstance(redirect_to, dict):
+			frappe.flags.redirect_location = redirect_to["path"]
+			raise frappe.Redirect(redirect_to["status_code"])
+		frappe.flags.redirect_location = redirect_to
+		raise frappe.Redirect
+
+	if redirect_to is False:
+		return
+
 	redirects = frappe.get_hooks("website_redirects")
 	redirects += frappe.get_all(
 		"Website Route Redirect", ["source", "target", "redirect_http_status"], order_by=None
@@ -116,19 +134,10 @@ def resolve_redirect(path, query_string=None):
 	if not redirects:
 		return
 
-	redirect_to = frappe.cache.hget("website_redirects", path)
-
-	if redirect_to:
-		if isinstance(redirect_to, dict):
-			frappe.flags.redirect_location = redirect_to["path"]
-			raise frappe.Redirect(redirect_to["status_code"])
-		frappe.flags.redirect_location = redirect_to
-		raise frappe.Redirect
-
 	for rule in redirects:
 		pattern = rule["source"].strip("/ ") + "$"
 		path_to_match = path
-		if rule.get("match_with_query_string"):
+		if query_string and rule.get("match_with_query_string"):
 			path_to_match = path + "?" + frappe.safe_decode(query_string)
 
 		try:
@@ -141,9 +150,11 @@ def resolve_redirect(path, query_string=None):
 			frappe.flags.redirect_location = redirect_to
 			status_code = rule.get("redirect_http_status") or 301
 			frappe.cache.hset(
-				"website_redirects", path_to_match, {"path": redirect_to, "status_code": status_code}
+				"website_redirects", path_to_match or "/", {"path": redirect_to, "status_code": status_code}
 			)
 			raise frappe.Redirect(status_code)
+
+	frappe.cache.hset("website_redirects", path_to_match or "/", False)
 
 
 def resolve_path(path):
@@ -167,8 +178,7 @@ def resolve_path(path):
 def resolve_from_map(path):
 	"""transform dynamic route to a static one from hooks and route defined in doctype"""
 	rules = [
-		Rule(r["from_route"], endpoint=r["to_route"], defaults=r.get("defaults"))
-		for r in get_website_rules()
+		Rule(r["from_route"], endpoint=r["to_route"], defaults=r.get("defaults")) for r in get_website_rules()
 	]
 
 	return evaluate_dynamic_routes(rules, path) or path
@@ -190,3 +200,8 @@ def get_website_rules():
 		return _get()
 
 	return frappe.cache.get_value("website_route_rules", _get)
+
+
+def validate_path(path: str):
+	if not PathResolver(path).is_valid_path():
+		frappe.throw(frappe._("Path {0} it not a valid path").format(frappe.bold(path)))

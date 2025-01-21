@@ -49,9 +49,6 @@ frappe.ui.form.Control = class BaseControl {
 		if (this.df.get_status) {
 			return this.df.get_status(this);
 		}
-		if (this.df.is_virtual) {
-			return "Read";
-		}
 
 		if (
 			(!this.doctype && !this.docname) ||
@@ -127,6 +124,7 @@ frappe.ui.form.Control = class BaseControl {
 			status === "Read" &&
 			!this.only_input &&
 			is_null(value) &&
+			cint(frappe.boot.sysdefaults.hide_empty_read_only_fields) &&
 			!["HTML", "Image", "Button", "Geolocation"].includes(this.df.fieldtype)
 		) {
 			if (explain) console.log("By Hide Read-only, null fields: None");

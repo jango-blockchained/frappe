@@ -3,14 +3,21 @@
 import json
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from frappe.utils import add_to_date, get_link_to_form, today
 from frappe.utils.data import is_html
 
-# test_records = frappe.get_test_records('Auto Email Report')
+
+class UnitTestAutoEmailReport(UnitTestCase):
+	"""
+	Unit tests for AutoEmailReport.
+	Use this class for testing individual functions and methods.
+	"""
+
+	pass
 
 
-class TestAutoEmailReport(FrappeTestCase):
+class TestAutoEmailReport(IntegrationTestCase):
 	def test_auto_email(self):
 		frappe.delete_doc("Auto Email Report", "Permitted Documents For User")
 
@@ -46,17 +53,15 @@ class TestAutoEmailReport(FrappeTestCase):
 def get_auto_email_report():
 	if not frappe.db.exists("Auto Email Report", "Permitted Documents For User"):
 		auto_email_report = frappe.get_doc(
-			dict(
-				doctype="Auto Email Report",
-				report="Permitted Documents For User",
-				report_type="Script Report",
-				user="Administrator",
-				enabled=1,
-				email_to="test@example.com",
-				format="HTML",
-				frequency="Daily",
-				filters=json.dumps(dict(user="Administrator", doctype="DocType")),
-			)
+			doctype="Auto Email Report",
+			report="Permitted Documents For User",
+			report_type="Script Report",
+			user="Administrator",
+			enabled=1,
+			email_to="test@example.com",
+			format="HTML",
+			frequency="Daily",
+			filters=json.dumps(dict(user="Administrator", doctype="DocType")),
 		).insert()
 	else:
 		auto_email_report = frappe.get_doc("Auto Email Report", "Permitted Documents For User")

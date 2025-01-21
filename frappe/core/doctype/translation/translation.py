@@ -5,7 +5,7 @@ import json
 
 import frappe
 from frappe.model.document import Document
-from frappe.translate import MERGED_TRANSLATION_KEY, USER_TRANSLATION_KEY, get_translator_url
+from frappe.translate import MERGED_TRANSLATION_KEY, USER_TRANSLATION_KEY
 from frappe.utils import is_html, strip_html_tags
 
 
@@ -26,6 +26,7 @@ class Translation(Document):
 		source_text: DF.Code
 		translated_text: DF.Code
 	# end: auto-generated types
+
 	def validate(self):
 		if is_html(self.source_text):
 			self.remove_html_from_source()

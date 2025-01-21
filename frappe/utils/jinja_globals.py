@@ -11,7 +11,7 @@ def resolve_class(*classes):
 	if classes is False:
 		return ""
 
-	if isinstance(classes, (list, tuple)):
+	if isinstance(classes, list | tuple):
 		return " ".join(resolve_class(c) for c in classes).strip()
 
 	if isinstance(classes, dict):
@@ -108,6 +108,25 @@ def include_script(path, preload=True):
 		frappe.local.preload_assets["script"].append(path)
 
 	return f'<script type="text/javascript" src="{path}"></script>'
+
+
+def include_icons(path, preload=True):
+	"""Get path of bundled svg icons files.
+
+	If preload is specified the path will be added to preload headers so browsers can prefetch
+	assets."""
+	path = bundled_asset(path)
+
+	if preload:
+		import frappe
+
+		frappe.local.preload_assets["icons"].append(path)
+
+	return (
+		'<script type="text/javascript">fetch(`'
+		+ path
+		+ '?v=${window._version_number}`, {credentials: "same-origin"}).then((r) => r.text()).then((svg) => {let c = document.getElementById("all-symbols"); c.insertAdjacentHTML("beforeend", svg);});</script>'
+	)
 
 
 def include_style(path, rtl=None, preload=True):

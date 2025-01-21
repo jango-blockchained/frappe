@@ -9,10 +9,10 @@ from frappe.automation.doctype.assignment_rule.test_assignment_rule import (
 )
 from frappe.desk.form.load import get_assignments
 from frappe.desk.listview import get_group_by_count
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 
-class TestAssign(FrappeTestCase):
+class TestAssign(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
@@ -81,9 +81,7 @@ class TestAssign(FrappeTestCase):
 		self.assertEqual(data["test_assign1@example.com"], 1)
 		self.assertEqual(data["test_assign2@example.com"], 3)
 
-		data = {
-			d.name: d.count for d in get_group_by_count(TEST_DOCTYPE, '[{"public": 1}]', "assigned_to")
-		}
+		data = {d.name: d.count for d in get_group_by_count(TEST_DOCTYPE, '[{"public": 1}]', "assigned_to")}
 
 		self.assertFalse("test_assign1@example.com" in data)
 		self.assertEqual(data["test_assign2@example.com"], 2)
