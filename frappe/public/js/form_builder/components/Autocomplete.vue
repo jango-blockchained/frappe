@@ -8,7 +8,7 @@
 					type="text"
 					@change="(e) => (query = e.target.value)"
 					:value="query"
-					:placeholder="props.placeholder"
+					:placeholder="__(props.placeholder)"
 					autocomplete="off"
 					@click.stop
 				/>
@@ -25,7 +25,7 @@
 					v-slot="{ active }"
 				>
 					<li :class="['combo-box-option', active ? 'active' : '']">
-						{{ field.label }}
+						{{ __(field.label) }}
 					</li>
 				</ComboboxOption>
 			</div>

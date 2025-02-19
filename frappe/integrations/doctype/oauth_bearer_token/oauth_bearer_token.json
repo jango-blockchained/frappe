@@ -30,8 +30,10 @@
    "fieldname": "user",
    "fieldtype": "Link",
    "label": "User",
+   "not_nullable": 1,
    "options": "User",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "scopes",
@@ -75,7 +77,7 @@
   }
  ],
  "links": [],
- "modified": "2023-04-07 07:08:00.249740",
+ "modified": "2025-01-15 17:54:35.661941",
  "modified_by": "Administrator",
  "module": "Integrations",
  "name": "OAuth Bearer Token",
@@ -93,7 +95,7 @@
    "share": 1
   }
  ],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": []
 }

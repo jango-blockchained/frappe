@@ -7,6 +7,7 @@ Note:
 	- None of the functions present here should be called from python code, their location and
 	  internal implementation can change without treating it as "breaking change".
 """
+
 import json
 from typing import Any
 
@@ -94,6 +95,17 @@ def create_doc(doctype: str):
 	return frappe.new_doc(doctype, **data).insert()
 
 
+def copy_doc(doctype: str, name: str, ignore_no_copy: bool = True):
+	"""Return a clean copy of the given document that can be modified and posted as a new document."""
+	doc = frappe.get_doc(doctype, name)
+	doc.check_permission("read")
+	doc.apply_fieldlevel_read_permissions()
+
+	copy = frappe.copy_doc(doc, ignore_no_copy=ignore_no_copy)
+
+	return copy.as_dict(no_private_properties=True, no_nulls=True)
+
+
 def update_doc(doctype: str, name: str):
 	data = frappe.form_dict
 
@@ -113,6 +125,11 @@ def delete_doc(doctype: str, name: str):
 	frappe.client.delete_doc(doctype, name)
 	frappe.response.http_status_code = 202
 	return "ok"
+
+
+def get_meta(doctype: str):
+	frappe.only_for("All")
+	return frappe.get_meta(doctype)
 
 
 def execute_doc_method(doctype: str, name: str, method: str | None = None):
@@ -180,6 +197,7 @@ url_rules = [
 	Rule("/document/<doctype>", methods=["GET"], endpoint=document_list),
 	Rule("/document/<doctype>", methods=["POST"], endpoint=create_doc),
 	Rule("/document/<doctype>/<path:name>/", methods=["GET"], endpoint=read_doc),
+	Rule("/document/<doctype>/<path:name>/copy", methods=["GET"], endpoint=copy_doc),
 	Rule("/document/<doctype>/<path:name>/", methods=["PATCH", "PUT"], endpoint=update_doc),
 	Rule("/document/<doctype>/<path:name>/", methods=["DELETE"], endpoint=delete_doc),
 	Rule(
@@ -188,6 +206,6 @@ url_rules = [
 		endpoint=execute_doc_method,
 	),
 	# Collection level APIs
-	Rule("/doctype/<doctype>/meta", methods=["GET"], endpoint=frappe.get_meta),
+	Rule("/doctype/<doctype>/meta", methods=["GET"], endpoint=get_meta),
 	Rule("/doctype/<doctype>/count", methods=["GET"], endpoint=count),
 ]

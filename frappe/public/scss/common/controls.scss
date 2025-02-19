@@ -145,6 +145,7 @@ select.form-control {
 	.control-label.reqd:after {
 		content: " *";
 		color: var(--red-400);
+		white-space: nowrap;
 	}
 	.help:empty {
 		display: none;
@@ -189,7 +190,7 @@ select.form-control {
 
 	.link-btn {
 		@extend .action-btn;
-		background-color: none;
+		background-color: var(--control-bg);
 		display: none;
 	}
 }
@@ -381,6 +382,17 @@ textarea.form-control {
 	min-height: 300px;
 	max-height: 600px;
 	overflow: auto;
+
+	table {
+		width: 100%;
+		border-collapse: collapse;
+
+		th,
+		td {
+			border: 1px solid var(--border-color);
+			padding: var(--padding-sm);
+		}
+	}
 }
 
 .markdown-toggle,

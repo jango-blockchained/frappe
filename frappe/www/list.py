@@ -108,7 +108,7 @@ def get_list_data(
 		filters=filters,
 		limit_start=limit_start,
 		limit_page_length=limit,
-		order_by=list_context.order_by or "modified desc",
+		order_by=list_context.order_by or "creation desc",
 	)
 
 	# allow guest if flag is set
@@ -130,9 +130,7 @@ def set_route(context):
 	elif context.doc and getattr(context.doc, "route", None):
 		context.route = context.doc.route
 	else:
-		context.route = "{}/{}".format(
-			context.pathname or quoted(context.doc.doctype), quoted(context.doc.name)
-		)
+		context.route = f"{context.pathname or quoted(context.doc.doctype)}/{quoted(context.doc.name)}"
 
 
 def prepare_filters(doctype, controller, kwargs):
@@ -146,6 +144,8 @@ def prepare_filters(doctype, controller, kwargs):
 
 	if hasattr(controller, "website") and controller.website.get("condition_field"):
 		filters[controller.website["condition_field"]] = 1
+	elif meta.is_published_field:
+		filters[meta.is_published_field] = 1
 
 	if filters.pathname:
 		# resolve additional filters from path
@@ -155,7 +155,7 @@ def prepare_filters(doctype, controller, kwargs):
 				filters[key] = val
 
 	# filter the filters to include valid fields only
-	for fieldname, val in list(filters.items()):
+	for fieldname in list(filters.keys()):
 		if not meta.has_field(fieldname):
 			del filters[fieldname]
 
@@ -187,7 +187,7 @@ def get_list_context(context, doctype, web_form_name=None):
 	# get context for custom webform
 	if meta.custom and web_form_name:
 		webform_list_contexts = frappe.get_hooks("webform_list_context")
-		if webform_list_contexts:
+		if webform_list_contexts and not frappe.get_doc("Module Def", meta.module).custom:
 			out = frappe._dict(frappe.get_attr(webform_list_contexts[0])(meta.module) or {})
 			if out:
 				list_context = out
@@ -216,6 +216,7 @@ def get_list(
 	ignore_permissions=False,
 	fields=None,
 	order_by=None,
+	or_filters=None,
 ):
 	meta = frappe.get_meta(doctype)
 	if not filters:
@@ -224,7 +225,8 @@ def get_list(
 	if not fields:
 		fields = "distinct *"
 
-	or_filters = []
+	if or_filters is None:
+		or_filters = []
 
 	if txt:
 		if meta.search_fields:

@@ -13,6 +13,7 @@ import requests
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils.background_jobs import get_queues_timeout
 from frappe.utils.jinja import validate_template
 from frappe.utils.safe_exec import get_safe_globals
 
@@ -30,16 +31,14 @@ class Webhook(Document):
 		from frappe.integrations.doctype.webhook_header.webhook_header import WebhookHeader
 		from frappe.types import DF
 
+		background_jobs_queue: DF.Autocomplete | None
 		condition: DF.SmallText | None
 		enable_security: DF.Check
 		enabled: DF.Check
 		is_dynamic_url: DF.Check
-		meets_condition: DF.Data | None
-		preview_document: DF.DynamicLink | None
-		preview_request_body: DF.Code | None
 		request_method: DF.Literal["POST", "PUT", "DELETE"]
 		request_structure: DF.Literal["", "Form URL-Encoded", "JSON"]
-		request_url: DF.Data
+		request_url: DF.SmallText
 		timeout: DF.Int
 		webhook_data: DF.Table[WebhookData]
 		webhook_docevent: DF.Literal[
@@ -56,6 +55,7 @@ class Webhook(Document):
 		webhook_json: DF.Code | None
 		webhook_secret: DF.Password | None
 	# end: auto-generated types
+
 	def validate(self):
 		self.validate_docevent()
 		self.validate_condition()
@@ -66,7 +66,7 @@ class Webhook(Document):
 		self.preview_document = None
 
 	def on_update(self):
-		frappe.cache.delete_value("webhooks")
+		frappe.client_cache.delete_value("webhooks")
 
 	def validate_docevent(self):
 		if self.webhook_doctype:
@@ -116,35 +116,24 @@ class Webhook(Document):
 				frappe.throw(_("Invalid Webhook Secret"))
 
 	@frappe.whitelist()
-	def generate_preview(self):
-		# This function doesn't need to do anything specific as virtual fields
-		# get evaluated automatically.
-		pass
-
-	@property
-	def meets_condition(self):
+	def preview_meets_condition(self, preview_document):
 		if not self.condition:
 			return _("Yes")
-
-		if not (self.preview_document and self.webhook_doctype):
-			return _("Select a document to check if it meets conditions.")
-
 		try:
-			doc = frappe.get_cached_doc(self.webhook_doctype, self.preview_document)
+			doc = frappe.get_cached_doc(self.webhook_doctype, preview_document)
 			met_condition = frappe.safe_eval(self.condition, eval_locals=get_context(doc))
 		except Exception as e:
+			frappe.local.message_log = []
 			return _("Failed to evaluate conditions: {}").format(e)
 		return _("Yes") if met_condition else _("No")
 
-	@property
-	def preview_request_body(self):
-		if not (self.preview_document and self.webhook_doctype):
-			return _("Select a document to preview request data")
-
+	@frappe.whitelist()
+	def preview_request_body(self, preview_document):
 		try:
-			doc = frappe.get_cached_doc(self.webhook_doctype, self.preview_document)
+			doc = frappe.get_cached_doc(self.webhook_doctype, preview_document)
 			return frappe.as_json(get_webhook_data(doc, self))
 		except Exception as e:
+			frappe.local.message_log = []
 			return _("Failed to compute request body: {}").format(e)
 
 
@@ -153,7 +142,7 @@ def get_context(doc):
 
 
 def enqueue_webhook(doc, webhook) -> None:
-	request_url = headers = data = None
+	request_url = headers = data = r = None
 	try:
 		webhook: Webhook = frappe.get_doc("Webhook", webhook.get("name"))
 		request_url = webhook.request_url
@@ -164,7 +153,7 @@ def enqueue_webhook(doc, webhook) -> None:
 
 	except Exception as e:
 		frappe.logger().debug({"enqueue_webhook_error": e})
-		log_request(webhook.name, doc.name, request_url, headers, data)
+		log_request(webhook.name, doc.doctype, doc.name, request_url, headers, data)
 		return
 
 	for i in range(3):
@@ -178,16 +167,16 @@ def enqueue_webhook(doc, webhook) -> None:
 			)
 			r.raise_for_status()
 			frappe.logger().debug({"webhook_success": r.text})
-			log_request(webhook.name, doc.name, request_url, headers, data, r)
+			log_request(webhook.name, doc.doctype, doc.name, request_url, headers, data, r)
 			break
 
 		except requests.exceptions.ReadTimeout as e:
 			frappe.logger().debug({"webhook_error": e, "try": i + 1})
-			log_request(webhook.name, doc.name, request_url, headers, data)
+			log_request(webhook.name, doc.doctype, doc.name, request_url, headers, data)
 
 		except Exception as e:
 			frappe.logger().debug({"webhook_error": e, "try": i + 1})
-			log_request(webhook.name, doc.name, request_url, headers, data, r)
+			log_request(webhook.name, doc.doctype, doc.name, request_url, headers, data, r)
 			sleep(3 * i + 1)
 			if i != 2:
 				continue
@@ -195,6 +184,7 @@ def enqueue_webhook(doc, webhook) -> None:
 
 def log_request(
 	webhook: str,
+	doctype: str,
 	docname: str,
 	url: str,
 	headers: dict,
@@ -205,12 +195,13 @@ def log_request(
 		{
 			"doctype": "Webhook Request Log",
 			"webhook": webhook,
+			"reference_doctype": doctype,
 			"reference_document": docname,
 			"user": frappe.session.user if frappe.session.user else None,
 			"url": url,
 			"headers": frappe.as_json(headers) if headers else None,
 			"data": frappe.as_json(data) if data else None,
-			"response": res and res.text,
+			"response": res.text if res is not None else None,
 			"error": frappe.get_traceback(),
 		}
 	)
@@ -251,3 +242,11 @@ def get_webhook_data(doc, webhook):
 		data = json.loads(data)
 
 	return data
+
+
+@frappe.whitelist()
+def get_all_queues():
+	"""Fetches all workers and returns a list of available queue names."""
+	frappe.only_for("System Manager")
+
+	return get_queues_timeout().keys()

@@ -6,7 +6,6 @@ from frappe import _
 from frappe.core.doctype.submission_queue.submission_queue import queue_submission
 from frappe.model.document import Document
 from frappe.utils import cint
-from frappe.utils.deprecations import deprecated
 from frappe.utils.scheduler import is_scheduler_inactive
 
 
@@ -21,7 +20,7 @@ class BulkUpdate(Document):
 
 		condition: DF.SmallText | None
 		document_type: DF.Link
-		field: DF.Literal
+		field: DF.Literal[None]
 		limit: DF.Int
 		update_value: DF.SmallText
 	# end: auto-generated types
@@ -66,9 +65,7 @@ def submit_cancel_or_update_docs(doctype, docnames, action="submit", data=None, 
 			timeout=1000,
 		)
 	else:
-		frappe.throw(
-			_("Bulk operations only support up to 500 documents."), title=_("Too Many Documents")
-		)
+		frappe.throw(_("Bulk operations only support up to 500 documents."), title=_("Too Many Documents"))
 
 
 def _bulk_action(doctype, docnames, action, data, task_id=None):
@@ -113,7 +110,4 @@ def _bulk_action(doctype, docnames, action, data, task_id=None):
 	return failed
 
 
-@deprecated
-def show_progress(docnames, message, i, description):
-	n = len(docnames)
-	frappe.publish_progress(float(i) * 100 / n, title=message, description=description)
+from frappe.deprecation_dumpster import show_progress

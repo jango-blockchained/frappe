@@ -140,6 +140,14 @@ frappe.ui.form.on("Customize Form", {
 					__("Actions")
 				);
 
+				frm.add_custom_button(
+					__("Trim Table"),
+					function () {
+						frm.trigger("trim_table");
+					},
+					__("Actions")
+				);
+
 				const is_autoname_autoincrement = frm.doc.autoname === "autoincrement";
 				frm.set_df_property("naming_rule", "hidden", is_autoname_autoincrement);
 				frm.set_df_property("autoname", "read_only", is_autoname_autoincrement);
@@ -194,6 +202,40 @@ frappe.ui.form.on("Customize Form", {
 		);
 	},
 
+	async trim_table(frm) {
+		let dropped_columns = await frappe.xcall(
+			"frappe.custom.doctype.customize_form.customize_form.get_orphaned_columns",
+			{ doctype: frm.doc.doc_type }
+		);
+
+		if (!dropped_columns?.length) {
+			frappe.toast(__("This doctype has no orphan fields to trim"));
+			return;
+		}
+		let msg = __(
+			"Warning: DATA LOSS IMMINENT! Proceeding will permanently delete following database columns from doctype {0}:",
+			[frm.doc.doc_type.bold()]
+		);
+		msg += "<ol>" + dropped_columns.map((col) => `<li>${col}</li>`).join("") + "</ol>";
+		msg += __("This action is irreversible. Do you wish to continue?");
+
+		frappe.confirm(msg, () => {
+			return frm.call({
+				doc: frm.doc,
+				method: "trim_table",
+				callback: function (r) {
+					if (!r.exc) {
+						frappe.show_alert({
+							message: __("Table Trimmed"),
+							indicator: "green",
+						});
+						frappe.customize_form.clear_locals_and_refresh(frm);
+					}
+				},
+			});
+		});
+	},
+
 	setup_export(frm) {
 		if (frappe.boot.developer_mode) {
 			frm.add_custom_button(
@@ -218,7 +260,10 @@ frappe.ui.form.on("Customize Form", {
 								fieldtype: "Check",
 								fieldname: "with_permissions",
 								label: __("Export Custom Permissions"),
-								default: 1,
+								description: __(
+									"Exported permissions will be force-synced on every migrate overriding any other customization."
+								),
+								default: 0,
 							},
 						],
 						function (data) {
@@ -246,7 +291,7 @@ frappe.ui.form.on("Customize Form", {
 			var fields = $.map(frm.doc.fields, function (df) {
 				return frappe.model.is_value_type(df.fieldtype) ? df.fieldname : null;
 			});
-			fields = ["", "name", "modified"].concat(fields);
+			fields = ["", "name", "creation", "modified"].concat(fields);
 			frm.set_df_property("sort_field", "options", fields);
 		}
 	},
@@ -290,10 +335,14 @@ frappe.ui.form.on("Customize Form Field", {
 	},
 });
 
+let parenttype, parent; // used in the form events for the child tables: links, actions and states
+
 // can't delete standard links
 frappe.ui.form.on("DocType Link", {
 	before_links_remove: function (frm, doctype, name) {
 		let row = frappe.get_doc(doctype, name);
+		parenttype = row.parenttype; // used in the event links_remove
+		parent = row.parent; // used in the event links_remove
 		if (!(row.custom || row.__islocal)) {
 			frappe.msgprint(__("Cannot delete standard link. You can hide it if you want"));
 			throw "cannot delete standard link";
@@ -303,12 +352,19 @@ frappe.ui.form.on("DocType Link", {
 		let f = frappe.model.get_doc(cdt, cdn);
 		f.custom = 1;
 	},
+	links_remove: function (frm, doctype, name) {
+		// replicate the changed rows from the browser's copy of the parent doc to the current 'Customize Form' doc
+		let parent_doc = locals[parenttype][parent];
+		frm.doc.links = parent_doc.links;
+	},
 });
 
 // can't delete standard actions
 frappe.ui.form.on("DocType Action", {
 	before_actions_remove: function (frm, doctype, name) {
 		let row = frappe.get_doc(doctype, name);
+		parenttype = row.parenttype; // used in the event actions_remove
+		parent = row.parent; // used in the event actions_remove
 		if (!(row.custom || row.__islocal)) {
 			frappe.msgprint(__("Cannot delete standard action. You can hide it if you want"));
 			throw "cannot delete standard action";
@@ -318,12 +374,19 @@ frappe.ui.form.on("DocType Action", {
 		let f = frappe.model.get_doc(cdt, cdn);
 		f.custom = 1;
 	},
+	actions_remove: function (frm, doctype, name) {
+		// replicate the changed rows from the browser's copy of the parent doc to the current 'Customize Form' doc
+		let parent_doc = locals[parenttype][parent];
+		frm.doc.actions = parent_doc.actions;
+	},
 });
 
 // can't delete standard states
 frappe.ui.form.on("DocType State", {
 	before_states_remove: function (frm, doctype, name) {
 		let row = frappe.get_doc(doctype, name);
+		parenttype = row.parenttype; // used in the event states_remove
+		parent = row.parent; // used in the event states_remove
 		if (!(row.custom || row.__islocal)) {
 			frappe.msgprint(__("Cannot delete standard document state."));
 			throw "cannot delete standard document state";
@@ -332,6 +395,11 @@ frappe.ui.form.on("DocType State", {
 	states_add: function (frm, cdt, cdn) {
 		let f = frappe.model.get_doc(cdt, cdn);
 		f.custom = 1;
+	},
+	states_remove: function (frm, doctype, name) {
+		// replicate the changed rows from the browser's copy of the parent doc to the current 'Customize Form' doc
+		let parent_doc = locals[parenttype][parent];
+		frm.doc.states = parent_doc.states;
 	},
 });
 

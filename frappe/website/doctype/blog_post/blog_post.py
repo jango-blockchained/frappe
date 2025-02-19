@@ -53,8 +53,8 @@ class BlogPost(WebsiteGenerator):
 		read_time: DF.Int
 		route: DF.Data | None
 		title: DF.Data
-
 	# end: auto-generated types
+
 	@frappe.whitelist()
 	def make_route(self):
 		if not self.route:
@@ -94,6 +94,13 @@ class BlogPost(WebsiteGenerator):
 			self.reset_featured_for_other_blogs()
 
 		self.set_read_time()
+
+		if self.is_website_published():
+			from frappe.core.doctype.file.utils import extract_images_from_doc
+
+			# Extract images first before the standard image extraction to ensure they are public.
+			extract_images_from_doc(self, "content", is_private=False)
+			extract_images_from_doc(self, "content_md", is_private=False)
 
 	def reset_featured_for_other_blogs(self):
 		all_posts = frappe.get_all("Blog Post", {"featured": 1})
@@ -301,17 +308,13 @@ def get_blog_categories():
 
 
 def clear_blog_cache():
-	for blog in frappe.db.get_list(
-		"Blog Post", fields=["route"], pluck="route", filters={"published": True}
-	):
+	for blog in frappe.db.get_list("Blog Post", fields=["route"], pluck="route", filters={"published": True}):
 		clear_cache(blog)
 
 	clear_cache("writers")
 
 
-def get_blog_list(
-	doctype, txt=None, filters=None, limit_start=0, limit_page_length=20, order_by=None
-):
+def get_blog_list(doctype, txt=None, filters=None, limit_start=0, limit_page_length=20, order_by=None):
 	conditions = []
 	if filters and filters.get("blog_category"):
 		category = filters.get("blog_category")
@@ -321,14 +324,14 @@ def get_blog_list(
 		)
 
 	if filters and filters.get("blogger"):
-		conditions.append("t1.blogger=%s" % frappe.db.escape(filters.get("blogger")))
+		conditions.append("t1.blogger={}".format(frappe.db.escape(filters.get("blogger"))))
 
 	if category:
-		conditions.append("t1.blog_category=%s" % frappe.db.escape(category))
+		conditions.append("t1.blog_category={}".format(frappe.db.escape(category)))
 
 	if txt:
 		conditions.append(
-			'(t1.content like {0} or t1.title like {0}")'.format(frappe.db.escape("%" + txt + "%"))
+			"(t1.content like {0} or t1.title like {0})".format(frappe.db.escape("%" + txt + "%"))
 		)
 
 	if conditions:

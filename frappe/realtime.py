@@ -9,9 +9,7 @@ import frappe
 from frappe.utils.data import cstr
 
 
-def publish_progress(
-	percent, title=None, doctype=None, docname=None, description=None, task_id=None
-):
+def publish_progress(percent, title=None, doctype=None, docname=None, description=None, task_id=None):
 	publish_realtime(
 		"progress",
 		{"percent": percent, "title": title, "description": description},
@@ -23,13 +21,13 @@ def publish_progress(
 
 
 def publish_realtime(
-	event: str = None,
-	message: dict = None,
-	room: str = None,
-	user: str = None,
-	doctype: str = None,
-	docname: str = None,
-	task_id: str = None,
+	event: str | None = None,
+	message: dict | None = None,
+	room: str | None = None,
+	user: str | None = None,
+	doctype: str | None = None,
+	docname: str | None = None,
+	task_id: str | None = None,
 	after_commit: bool = False,
 ):
 	"""Publish real-time updates
@@ -116,22 +114,9 @@ def emit_via_redis(event, message, room):
 
 
 @frappe.whitelist(allow_guest=True)
-def can_subscribe_doc(doctype: str, docname: str) -> bool:
-	from frappe.exceptions import PermissionError
-
-	if not frappe.has_permission(doctype=doctype, doc=docname, ptype="read"):
-		raise PermissionError()
-
-	return True
-
-
-@frappe.whitelist(allow_guest=True)
-def can_subscribe_doctype(doctype: str) -> bool:
-	from frappe.exceptions import PermissionError
-
-	if not frappe.has_permission(doctype=doctype, ptype="read"):
-		raise PermissionError()
-
+def has_permission(doctype: str, name: str) -> bool:
+	doc = frappe.get_doc(doctype, name)
+	doc.check_permission("read")
 	return True
 
 
@@ -140,6 +125,7 @@ def get_user_info():
 	return {
 		"user": frappe.session.user,
 		"user_type": frappe.session.data.user_type,
+		"installed_apps": frappe.get_installed_apps(),
 	}
 
 

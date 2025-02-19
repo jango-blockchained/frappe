@@ -27,6 +27,8 @@ class DataImport(Document):
 	if TYPE_CHECKING:
 		from frappe.types import DF
 
+		custom_delimiters: DF.Check
+		delimiter_options: DF.Data | None
 		google_sheets_url: DF.Data | None
 		import_file: DF.Attach | None
 		import_type: DF.Literal["", "Insert New Records", "Update Existing Records"]
@@ -38,7 +40,7 @@ class DataImport(Document):
 		submit_after_import: DF.Check
 		template_options: DF.Code | None
 		template_warnings: DF.Code | None
-
+		use_csv_sniffer: DF.Check
 	# end: auto-generated types
 
 	def validate(self):
@@ -51,10 +53,15 @@ class DataImport(Document):
 			self.template_options = ""
 			self.template_warnings = ""
 
+		self.set_delimiters_flag()
 		self.validate_doctype()
 		self.validate_import_file()
 		self.validate_google_sheets_url()
 		self.set_payload_count()
+
+	def set_delimiters_flag(self):
+		if self.import_file:
+			frappe.flags.delimiter_options = self.delimiter_options or ","
 
 	def validate_doctype(self):
 		if self.reference_doctype in BLOCKED_DOCTYPES:
@@ -80,6 +87,7 @@ class DataImport(Document):
 	def get_preview_from_template(self, import_file=None, google_sheets_url=None):
 		if import_file:
 			self.import_file = import_file
+			self.set_delimiters_flag()
 
 		if google_sheets_url:
 			self.google_sheets_url = google_sheets_url
@@ -93,10 +101,11 @@ class DataImport(Document):
 	def start_import(self):
 		from frappe.utils.scheduler import is_scheduler_inactive
 
-		if is_scheduler_inactive() and not frappe.flags.in_test:
+		run_now = frappe.flags.in_test or frappe.conf.developer_mode
+		if is_scheduler_inactive() and not run_now:
 			frappe.throw(_("Scheduler is inactive. Cannot import data."), title=_("Scheduler Inactive"))
 
-		job_id = f"data_import::{self.name}"
+		job_id = f"data_import||{self.name}"
 
 		if not is_job_enqueued(job_id):
 			enqueue(
@@ -106,7 +115,7 @@ class DataImport(Document):
 				event="data_import",
 				job_id=job_id,
 				data_import=self.name,
-				now=frappe.conf.developer_mode or frappe.flags.in_test,
+				now=run_now,
 			)
 			return True
 
@@ -119,7 +128,10 @@ class DataImport(Document):
 		return self.get_importer().export_import_log()
 
 	def get_importer(self):
-		return Importer(self.reference_doctype, data_import=self)
+		return Importer(self.reference_doctype, data_import=self, use_sniffer=self.use_csv_sniffer)
+
+	def on_trash(self):
+		frappe.db.delete("Data Import Log", {"data_import": self.name})
 
 
 @frappe.whitelist()
@@ -130,7 +142,7 @@ def get_preview_from_template(data_import, import_file=None, google_sheets_url=N
 
 
 @frappe.whitelist()
-def form_start_import(data_import):
+def form_start_import(data_import: str):
 	return frappe.get_doc("Data Import", data_import).start_import()
 
 
@@ -154,9 +166,7 @@ def start_import(data_import):
 
 
 @frappe.whitelist()
-def download_template(
-	doctype, export_fields=None, export_records=None, export_filters=None, file_type="CSV"
-):
+def download_template(doctype, export_fields=None, export_records=None, export_filters=None, file_type="CSV"):
 	"""
 	Download template from Exporter
 	        :param doctype: Document Type
@@ -220,6 +230,20 @@ def get_import_status(data_import_name):
 	return import_status
 
 
+@frappe.whitelist()
+def get_import_logs(data_import: str):
+	doc = frappe.get_doc("Data Import", data_import)
+	doc.check_permission("read")
+
+	return frappe.get_all(
+		"Data Import Log",
+		fields=["success", "docname", "messages", "exception", "row_indexes"],
+		filters={"data_import": data_import},
+		limit_page_length=5000,
+		order_by="log_index",
+	)
+
+
 def import_file(doctype, file_path, import_type, submit_after_import=False, console=False):
 	"""
 	Import documents in from CSV or XLSX using data import.
@@ -273,10 +297,19 @@ def export_json(doctype, path, filters=None, or_filters=None, name=None, order_b
 			for key in del_keys:
 				if key in doc:
 					del doc[key]
-			for k, v in doc.items():
+			for v in doc.values():
 				if isinstance(v, list):
 					for child in v:
-						for key in del_keys + ("docstatus", "doctype", "modified", "name"):
+						for key in (
+							*del_keys,
+							"docstatus",
+							"doctype",
+							"modified",
+							"name",
+							"parent",
+							"parentfield",
+							"parenttype",
+						):
 							if key in child:
 								del child[key]
 

@@ -3,6 +3,7 @@
 
 import os
 import subprocess
+from pathlib import Path
 
 import frappe
 from frappe.model.document import Document
@@ -27,6 +28,7 @@ class PackageRelease(Document):
 		publish: DF.Check
 		release_notes: DF.MarkdownEditor | None
 	# end: auto-generated types
+
 	def set_version(self):
 		# set the next patch release by default
 		doctype = frappe.qb.DocType("Package Release")
@@ -64,12 +66,16 @@ class PackageRelease(Document):
 		)
 
 	def validate(self):
-		if self.publish:
-			self.export_files()
-
-	def export_files(self):
-		"""Export all the documents in this package to site/packages folder"""
 		package = frappe.get_doc("Package", self.package)
+		package_path = Path(frappe.get_site_path("packages", package.package_name))
+		if not package_path.resolve().is_relative_to(Path(frappe.get_site_path()).resolve()):
+			frappe.throw("Invalid package path: " + package_path.as_posix())
+
+		if self.publish:
+			self.export_files(package)
+
+	def export_files(self, package):
+		"""Export all the documents in this package to site/packages folder"""
 
 		self.export_modules()
 		self.export_package_files(package)
@@ -115,13 +121,14 @@ class PackageRelease(Document):
 
 		# make attachment
 		file = frappe.get_doc(
-			dict(
-				doctype="File",
-				file_url="/" + os.path.join("files", filename),
-				attached_to_doctype=self.doctype,
-				attached_to_name=self.name,
-			)
+			doctype="File",
+			file_url="/" + os.path.join("files", filename),
+			attached_to_doctype=self.doctype,
+			attached_to_name=self.name,
 		)
+
+		# Set path to tarball
+		self.path = file.file_url
 
 		file.flags.ignore_duplicate_entry_error = True
 		file.insert()

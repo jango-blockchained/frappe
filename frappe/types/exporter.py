@@ -17,6 +17,7 @@ from keyword import iskeyword
 from pathlib import Path
 
 import frappe
+from frappe import scrub
 from frappe.types import DF
 
 field_template = "{field}: {type}"
@@ -59,7 +60,12 @@ class TypeExporter:
 
 		self.imports = {"from frappe.types import DF"}
 		self.indent = "\t"
-		self.controller_path = Path(inspect.getfile(get_controller(self.doctype)))
+		self.controller_path = (
+			Path(frappe.get_module_path(doc.module))
+			/ "doctype"
+			/ scrub(self.doctype)
+			/ f"{scrub(self.doctype)}.py"
+		)
 
 	def export_types(self):
 		self._guess_indentation()
@@ -183,7 +189,7 @@ class TypeExporter:
 		elif field.fieldtype == "Select":
 			if not field.options:
 				# Could be dynamic
-				return
+				return "[None]"
 			options = [o.strip() for o in field.options.split("\n")]
 			return json.dumps(options)
 

@@ -2,7 +2,9 @@
 # License: MIT. See LICENSE
 
 import base64
+import calendar
 import datetime
+import hashlib
 import json
 import math
 import operator
@@ -11,10 +13,11 @@ import time
 import typing
 from code import compile_command
 from enum import Enum
-from typing import Any, Literal, Optional, TypeVar, Union
+from functools import lru_cache
+from typing import Any, Literal, Optional, TypeVar
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import pytz
 from click import secho
 from dateutil import parser
 from dateutil.parser import ParserError
@@ -22,9 +25,13 @@ from dateutil.relativedelta import relativedelta
 
 import frappe
 from frappe.desk.utils import slug
+from frappe.locale import get_date_format, get_first_day_of_the_week, get_number_format, get_time_format
+from frappe.types.filter import Filters, FilterSignature, FilterTuple
+from frappe.utils.deprecations import deprecated
+from frappe.utils.number_format import NUMBER_FORMAT_MAP, NumberFormat
 
-DateTimeLikeObject = Union[str, datetime.date, datetime.datetime]
-NumericType = Union[int, float]
+DateTimeLikeObject = str | datetime.date | datetime.datetime
+NumericType = int | float
 TimespanOptions = Literal[
 	"last week",
 	"last month",
@@ -47,6 +54,8 @@ TimespanOptions = Literal[
 
 
 if typing.TYPE_CHECKING:
+	from collections.abc import Mapping
+
 	from PIL.ImageFile import ImageFile as PILImageFile
 
 	T = TypeVar("T")
@@ -83,10 +92,6 @@ class Weekday(Enum):
 	Saturday = 6
 
 
-def get_first_day_of_the_week() -> str:
-	return frappe.get_system_settings("first_day_of_the_week") or "Sunday"
-
-
 def get_start_of_week_index() -> int:
 	return Weekday[get_first_day_of_the_week()].value
 
@@ -108,21 +113,27 @@ def getdate(
 	"""
 	if not string_date:
 		return get_datetime().date()
-	if isinstance(string_date, datetime.datetime):
+	elif isinstance(string_date, datetime.datetime):
 		return string_date.date()
 
 	elif isinstance(string_date, datetime.date):
 		return string_date
 
-	if is_invalid_date_string(string_date):
+	elif is_invalid_date_string(string_date):
 		return None
+
 	try:
-		return parser.parse(string_date, dayfirst=parse_day_first).date()
-	except ParserError:
-		frappe.throw(
-			frappe._("{} is not a valid date string.").format(frappe.bold(string_date)),
-			title=frappe._("Invalid Date"),
-		)
+		# PERF: Our DATE_FORMAT is same as ISO format.
+		# fromisoformat is written in C so it's better than using strptime parser
+		return datetime.date.fromisoformat(string_date)
+	except ValueError:
+		try:
+			return parser.parse(string_date, dayfirst=parse_day_first).date()
+		except ParserError:
+			frappe.throw(
+				frappe._("{} is not a valid date string.").format(frappe.bold(string_date)),
+				title=frappe._("Invalid Date"),
+			)
 
 
 def get_datetime(
@@ -142,31 +153,33 @@ def get_datetime(
 	if datetime_str is None:
 		return now_datetime()
 
-	if isinstance(datetime_str, (datetime.datetime, datetime.timedelta)):
+	elif isinstance(datetime_str, datetime.datetime | datetime.timedelta):
 		return datetime_str
 
-	elif isinstance(datetime_str, (list, tuple)):
+	elif isinstance(datetime_str, list | tuple):
 		return datetime.datetime(datetime_str)
 
 	elif isinstance(datetime_str, datetime.date):
 		return datetime.datetime.combine(datetime_str, datetime.time())
 
-	if is_invalid_date_string(datetime_str):
+	elif is_invalid_date_string(datetime_str):
 		return None
 
 	try:
-		return datetime.datetime.strptime(datetime_str, DATETIME_FORMAT)
+		# PERF: Our DATETIME_FORMAT is same as ISO format.
+		# fromisoformat is written in C so it's better than using strptime parser
+		return datetime.datetime.fromisoformat(datetime_str)
 	except ValueError:
 		return parser.parse(datetime_str)
 
 
-def get_timedelta(time: str | None = None) -> datetime.timedelta | None:
+def get_timedelta(time: str | datetime.timedelta | None = None) -> datetime.timedelta | None:
 	"""Return `datetime.timedelta` object from string value of a valid time format.
 
 	Return None if `time` is not a valid format.
 
 	Args:
-	        time (str): A valid time representation. This string is parsed
+	        time (str | datetime.timedelta): A valid time representation. This string is parsed
 	        using `dateutil.parser.parse`. Examples of valid inputs are:
 	        '0:0:0', '17:21:00', '2012-01-19 17:21:00'. Checkout
 	        https://dateutil.readthedocs.io/en/stable/parser.html#dateutil.parser.parse
@@ -174,6 +187,9 @@ def get_timedelta(time: str | None = None) -> datetime.timedelta | None:
 	Return:
 	        datetime.timedelta: Timedelta object equivalent of the passed `time` string
 	"""
+	if isinstance(time, datetime.timedelta):
+		return time
+
 	time = time or "0:0:0"
 
 	try:
@@ -219,8 +235,7 @@ def add_to_date(
 	seconds=0,
 	as_string: Literal[False] = False,
 	as_datetime: Literal[False] = False,
-) -> datetime.date:
-	...
+) -> datetime.date: ...
 
 
 @typing.overload
@@ -235,8 +250,7 @@ def add_to_date(
 	seconds=0,
 	as_string: Literal[False] = False,
 	as_datetime: Literal[True] = True,
-) -> datetime.datetime:
-	...
+) -> datetime.datetime: ...
 
 
 @typing.overload
@@ -251,12 +265,11 @@ def add_to_date(
 	seconds=0,
 	as_string: Literal[True] = True,
 	as_datetime: bool = False,
-) -> str:
-	...
+) -> str: ...
 
 
 def add_to_date(
-	date: DateTimeLikeObject,
+	date: DateTimeLikeObject | None = None,
 	years=0,
 	months=0,
 	weeks=0,
@@ -280,7 +293,7 @@ def add_to_date(
 		if " " in date:
 			as_datetime = True
 		try:
-			date = parser.parse(date)
+			date = get_datetime(date)
 		except ParserError:
 			frappe.throw(frappe._("Please select a valid date filter"), title=frappe._("Invalid Date"))
 
@@ -329,31 +342,24 @@ def month_diff(string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeO
 	return (ed_date.year - st_date.year) * 12 + ed_date.month - st_date.month + 1
 
 
-def time_diff(
-	string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject
-) -> datetime.timedelta:
+def time_diff(string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject) -> datetime.timedelta:
 	"""Return the difference between given two dates as `datetime.timedelta` object."""
 	return get_datetime(string_ed_date) - get_datetime(string_st_date)
 
 
-def time_diff_in_seconds(
-	string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject
-) -> float:
+def time_diff_in_seconds(string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject) -> float:
 	"""Return the difference between given two dates in seconds."""
 	return time_diff(string_ed_date, string_st_date).total_seconds()
 
 
-def time_diff_in_hours(
-	string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject
-) -> float:
+def time_diff_in_hours(string_ed_date: DateTimeLikeObject, string_st_date: DateTimeLikeObject) -> float:
 	"""Return the difference between given two dates in hours."""
 	return round(float(time_diff(string_ed_date, string_st_date).total_seconds()) / 3600, 6)
 
 
 def now_datetime() -> datetime.datetime:
 	"""Return the current datetime in system timezone."""
-	dt = convert_utc_to_system_timezone(datetime.datetime.now(pytz.UTC))
-	return dt.replace(tzinfo=None)
+	return datetime.datetime.now(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
 
 
 def get_timestamp(date: Optional["DateTimeLikeObject"] = None) -> float:
@@ -368,32 +374,24 @@ def get_eta(from_time: DateTimeLikeObject, percent_complete) -> str:
 	return str(datetime.timedelta(seconds=(100 - percent_complete) / percent_complete * diff))
 
 
-def _get_system_timezone():
+def get_system_timezone() -> str:
+	"""Return the system timezone."""
 	return frappe.get_system_settings("time_zone") or "Asia/Kolkata"  # Default to India ?!
 
 
-def get_system_timezone() -> str:
-	"""Return the system timezone."""
-	if frappe.local.flags.in_test:
-		return _get_system_timezone()
-
-	return frappe.cache.get_value("time_zone", _get_system_timezone)
-
-
 def convert_utc_to_timezone(utc_timestamp: datetime.datetime, time_zone: str) -> datetime.datetime:
-	from pytz import UnknownTimeZoneError, timezone
-
 	if utc_timestamp.tzinfo is None:
-		utc_timestamp = timezone("UTC").localize(utc_timestamp)
+		utc_timestamp = utc_timestamp.replace(tzinfo=ZoneInfo("UTC"))
+
 	try:
-		return utc_timestamp.astimezone(timezone(time_zone))
-	except UnknownTimeZoneError:
+		return utc_timestamp.astimezone(ZoneInfo(time_zone))
+	except ZoneInfoNotFoundError:
 		return utc_timestamp
 
 
 def get_datetime_in_timezone(time_zone: str) -> datetime.datetime:
 	"""Return the current datetime in the given timezone (e.g. 'Asia/Kolkata')."""
-	utc_timestamp = datetime.datetime.now(pytz.UTC)
+	utc_timestamp = datetime.datetime.now(datetime.timezone.utc)
 	return convert_utc_to_timezone(utc_timestamp, time_zone)
 
 
@@ -450,19 +448,15 @@ def nowtime() -> str:
 
 
 @typing.overload
-def get_first_day(dt, d_years=0, d_months=0, as_str: Literal[False] = False) -> datetime.date:
-	...
+def get_first_day(dt, d_years=0, d_months=0, as_str: Literal[False] = False) -> datetime.date: ...
 
 
 @typing.overload
-def get_first_day(dt, d_years=0, d_months=0, as_str: Literal[True] = False) -> str:
-	...
+def get_first_day(dt, d_years=0, d_months=0, as_str: Literal[True] = False) -> str: ...
 
 
 # TODO: first arg
-def get_first_day(
-	dt, d_years: int = 0, d_months: int = 0, as_str: bool = False
-) -> str | datetime.date:
+def get_first_day(dt, d_years: int = 0, d_months: int = 0, as_str: bool = False) -> str | datetime.date:
 	"""Return the first day of the month for the date specified by date object.
 
 	Also, add `d_years` and `d_months` if specified.
@@ -483,18 +477,14 @@ def get_first_day(
 @typing.overload
 def get_quarter_start(
 	dt: DateTimeLikeObject | None = None, as_str: Literal[False] = False
-) -> datetime.date:
-	...
+) -> datetime.date: ...
 
 
 @typing.overload
-def get_quarter_start(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str:
-	...
+def get_quarter_start(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str: ...
 
 
-def get_quarter_start(
-	dt: DateTimeLikeObject | None = None, as_str: bool = False
-) -> str | datetime.date:
+def get_quarter_start(dt: DateTimeLikeObject | None = None, as_str: bool = False) -> str | datetime.date:
 	"""Return the start date of the quarter for the given datetime like object (`dt`).
 
 	If `dt` is None, the current quarter start date is returned.
@@ -506,13 +496,11 @@ def get_quarter_start(
 
 
 @typing.overload
-def get_first_day_of_week(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date:
-	...
+def get_first_day_of_week(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date: ...
 
 
 @typing.overload
-def get_first_day_of_week(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str:
-	...
+def get_first_day_of_week(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str: ...
 
 
 def get_first_day_of_week(dt: DateTimeLikeObject, as_str=False) -> datetime.date | str:
@@ -541,13 +529,11 @@ def get_normalized_weekday_index(dt):
 
 
 @typing.overload
-def get_year_start(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date:
-	...
+def get_year_start(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date: ...
 
 
 @typing.overload
-def get_year_start(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str:
-	...
+def get_year_start(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str: ...
 
 
 def get_year_start(dt: DateTimeLikeObject, as_str=False) -> str | datetime.date:
@@ -558,13 +544,11 @@ def get_year_start(dt: DateTimeLikeObject, as_str=False) -> str | datetime.date:
 
 
 @typing.overload
-def get_last_day_of_week(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date:
-	...
+def get_last_day_of_week(dt: DateTimeLikeObject, as_str: Literal[False] = False) -> datetime.date: ...
 
 
 @typing.overload
-def get_last_day_of_week(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str:
-	...
+def get_last_day_of_week(dt: DateTimeLikeObject, as_str: Literal[True] = False) -> str: ...
 
 
 def get_last_day_of_week(dt: DateTimeLikeObject, as_str=False) -> datetime.date | str:
@@ -594,18 +578,14 @@ def is_last_day_of_the_month(dt):
 @typing.overload
 def get_quarter_ending(
 	dt: DateTimeLikeObject | None = None, as_str: Literal[False] = False
-) -> datetime.date:
-	...
+) -> datetime.date: ...
 
 
 @typing.overload
-def get_quarter_ending(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str:
-	...
+def get_quarter_ending(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str: ...
 
 
-def get_quarter_ending(
-	date: DateTimeLikeObject | None = None, as_str=False
-) -> str | datetime.date:
+def get_quarter_ending(date: DateTimeLikeObject | None = None, as_str=False) -> str | datetime.date:
 	"""Return the end date of the quarter for the given datetime like object (`date`).
 
 	If `date` is None, the current quarter end date is returned.
@@ -628,13 +608,11 @@ def get_quarter_ending(
 @typing.overload
 def get_year_ending(
 	dt: DateTimeLikeObject | None = None, as_str: Literal[False] = False
-) -> datetime.date:
-	...
+) -> datetime.date: ...
 
 
 @typing.overload
-def get_year_ending(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str:
-	...
+def get_year_ending(dt: DateTimeLikeObject | None = None, as_str: Literal[True] = False) -> str: ...
 
 
 def get_year_ending(date: DateTimeLikeObject | None = None, as_str=False) -> datetime.date | str:
@@ -697,9 +675,9 @@ def get_time_str(timedelta_obj: datetime.timedelta | str) -> str:
 def get_user_date_format() -> str:
 	"""Get the current user date format. The result will be cached."""
 	if getattr(frappe.local, "user_date_format", None) is None:
-		frappe.local.user_date_format = frappe.db.get_default("date_format")
+		frappe.local.user_date_format = get_date_format()
 
-	return frappe.local.user_date_format or "yyyy-mm-dd"
+	return frappe.local.user_date_format
 
 
 get_user_format = get_user_date_format  # for backwards compatibility
@@ -708,14 +686,12 @@ get_user_format = get_user_date_format  # for backwards compatibility
 def get_user_time_format() -> str:
 	"""Get the current user time format. The result will be cached."""
 	if getattr(frappe.local, "user_time_format", None) is None:
-		frappe.local.user_time_format = frappe.db.get_default("time_format")
+		frappe.local.user_time_format = get_time_format()
 
-	return frappe.local.user_time_format or "HH:mm:ss"
+	return frappe.local.user_time_format
 
 
-def format_date(
-	string_date=None, format_string: str | None = None, parse_day_first: bool = False
-) -> str:
+def format_date(string_date=None, format_string: str | None = None, parse_day_first: bool = False) -> str:
 	"""Convert the given string date to :data:`user_date_format`.
 
 	User format specified in defaults
@@ -740,7 +716,7 @@ def format_date(
 		formatted_date = babel.dates.format_date(
 			date, format_string, locale=(frappe.local.lang or "").replace("-", "_")
 		)
-	except UnknownLocaleError:
+	except (UnknownLocaleError, ValueError):
 		format_string = format_string.replace("MM", "%m").replace("dd", "%d").replace("yyyy", "%Y")
 		formatted_date = date.strftime(format_string)
 	return formatted_date
@@ -772,7 +748,7 @@ def format_time(time_string=None, format_string: str | None = None) -> str:
 		formatted_time = babel.dates.format_time(
 			time_, format_string, locale=(frappe.local.lang or "").replace("-", "_")
 		)
-	except UnknownLocaleError:
+	except (UnknownLocaleError, ValueError):
 		formatted_time = time_.strftime("%H:%M:%S")
 	return formatted_time
 
@@ -800,7 +776,7 @@ def format_datetime(datetime_string: DateTimeLikeObject, format_string: str | No
 		formatted_datetime = babel.dates.format_datetime(
 			datetime, format_string, locale=(frappe.local.lang or "").replace("-", "_")
 		)
-	except UnknownLocaleError:
+	except (UnknownLocaleError, ValueError):
 		formatted_datetime = datetime.strftime("%Y-%m-%d %H:%M:%S")
 	return formatted_datetime
 
@@ -874,9 +850,7 @@ def duration_to_seconds(duration):
 def validate_duration_format(duration):
 	if not DURATION_PATTERN.match(duration):
 		frappe.throw(
-			frappe._("Value {0} must be in the valid duration format: d h m s").format(
-				frappe.bold(duration)
-			)
+			frappe._("Value {0} must be in the valid duration format: d h m s").format(frappe.bold(duration))
 		)
 
 
@@ -903,6 +877,20 @@ def get_weekday(datetime: DateTimeLikeObject | None = None) -> str:
 	return weekdays[datetime.weekday()]
 
 
+def get_month(datetime: DateTimeLikeObject | None = None) -> str:
+	"""Return the month name (e.g. 'January') for the given datetime like object (datetime.date, datetime.datetime, string).
+
+	If `datetime` argument is not provided, the current month name is returned.
+	"""
+	if not datetime:
+		datetime = now_datetime()
+
+	if isinstance(datetime, str):
+		datetime = get_datetime(datetime)
+
+	return calendar.month_name[datetime.month]
+
+
 def get_timespan_date_range(
 	timespan: TimespanOptions,
 ) -> tuple[datetime.datetime, datetime.datetime] | None:
@@ -910,6 +898,14 @@ def get_timespan_date_range(
 	today = getdate()
 
 	match timespan:
+		case "last 7 days":
+			return (add_to_date(today, days=-7), today)
+		case "last 14 days":
+			return (add_to_date(today, days=-14), today)
+		case "last 30 days":
+			return (add_to_date(today, days=-30), today)
+		case "last 90 days":
+			return (add_to_date(today, days=-90), today)
 		case "last week":
 			return (
 				get_first_day_of_week(add_to_date(today, days=-7)),
@@ -950,6 +946,21 @@ def get_timespan_date_range(
 			return (get_quarter_start(today), get_quarter_ending(today))
 		case "this year":
 			return (get_year_start(today), get_year_ending(today))
+		case "next 7 days":
+			return (
+				today,
+				add_to_date(today, days=7),
+			)
+		case "next 14 days":
+			return (
+				today,
+				add_to_date(today, days=14),
+			)
+		case "next 30 days":
+			return (
+				today,
+				add_to_date(today, days=30),
+			)
 		case "next week":
 			return (
 				get_first_day_of_week(add_to_date(today, days=7)),
@@ -984,9 +995,7 @@ def global_date_format(date: DateTimeLikeObject, format="long") -> str:
 	import babel.dates
 
 	date = getdate(date)
-	return babel.dates.format_date(
-		date, locale=(frappe.local.lang or "en").replace("-", "_"), format=format
-	)
+	return babel.dates.format_date(date, locale=(frappe.local.lang or "en").replace("-", "_"), format=format)
 
 
 def has_common(l1: typing.Hashable, l2: typing.Hashable) -> bool:
@@ -1082,17 +1091,19 @@ def cast(fieldtype, value=None):
 
 
 @typing.overload
-def flt(s: NumericType | str, precision: Literal[0]) -> int:
-	...
+def flt(s: NumericType | str, precision: Literal[0]) -> int: ...
 
 
 @typing.overload
-def flt(s: NumericType | str, precision: int | None = None) -> float:
-	...
+def flt(s: NumericType | str, precision: int | None = None) -> float: ...
+
+
+@typing.overload
+def flt(s: None) -> Literal[0.0]: ...
 
 
 def flt(
-	s: NumericType | str, precision: int | None = None, rounding_method: str | None = None
+	s: NumericType | str | None, precision: int | None = None, rounding_method: str | None = None
 ) -> float:
 	"""Convert to float (ignoring commas in string).
 
@@ -1112,7 +1123,13 @@ def flt(
 	10500.57
 	>>> flt("a")
 	0.0
+	>>> flt(None)
+	0.0
 	"""
+
+	if s is None:
+		return 0.0
+
 	if isinstance(s, str):
 		s = s.replace(",", "")
 
@@ -1128,7 +1145,7 @@ def flt(
 	return num
 
 
-def cint(s: NumericType | str, default: int = 0) -> int:
+def cint(s: NumericType | str | None, default: int = 0) -> int:
 	"""Convert to integer.
 
 	:param s: Number in string or other numeric format.
@@ -1141,12 +1158,20 @@ def cint(s: NumericType | str, default: int = 0) -> int:
 	100
 	>>> cint("a")
 	0
+	>>> cint(None)
+	0
 
 	"""
-	try:
-		return int(float(s))
-	except Exception:
+	if s is None:
 		return default
+
+	try:
+		return int(s)
+	except Exception:
+		try:
+			return int(float(s))
+		except Exception:
+			return default
 
 
 def floor(s: NumericType | str) -> int:
@@ -1172,7 +1197,7 @@ def cstr(s, encoding="utf-8") -> str:
 	return frappe.as_unicode(s, encoding)
 
 
-def sbool(x: str) -> bool | Any:
+def sbool(x: str | Any) -> bool | str | Any:
 	"""Convert str object to Boolean if possible.
 
 	Example:
@@ -1204,10 +1229,10 @@ def rounded(num, precision=0, rounding_method=None):
 		rounding_method or frappe.get_system_settings("rounding_method") or "Banker's Rounding (legacy)"
 	)
 
-	if rounding_method == "Banker's Rounding (legacy)":
-		return _bankers_rounding_legacy(num, precision)
-	elif rounding_method == "Banker's Rounding":
+	if rounding_method == "Banker's Rounding":
 		return _bankers_rounding(num, precision)
+	elif rounding_method == "Banker's Rounding (legacy)":
+		return _bankers_rounding_legacy(num, precision)
 	elif rounding_method == "Commercial Rounding":
 		return _round_away_from_zero(num, precision)
 	else:
@@ -1342,7 +1367,7 @@ def encode(obj, encoding="utf-8"):
 
 def parse_val(v):
 	"""Convert to simple datatypes from SQL query results."""
-	if isinstance(v, (datetime.date, datetime.datetime)):
+	if isinstance(v, datetime.date | datetime.datetime):
 		v = str(v)
 	elif isinstance(v, datetime.timedelta):
 		v = ":".join(str(v).split(":")[:2])
@@ -1358,14 +1383,13 @@ def fmt_money(
 	format: str | None = None,
 ) -> str:
 	"""Convert to string with commas for thousands, millions etc."""
-	number_format = format or frappe.db.get_default("number_format") or "#,###.##"
+	number_format = NumberFormat.from_string(format) if format else get_number_format()
+
 	if precision is None:
 		precision = cint(frappe.db.get_default("currency_precision")) or None
 
-	decimal_str, comma_str, number_format_precision = get_number_format_info(number_format)
-
 	if precision is None:
-		precision = number_format_precision
+		precision = number_format.precision
 
 	# 40,000 -> 40,000.00
 	# 40,000.00000 -> 40,000.00
@@ -1377,7 +1401,7 @@ def fmt_money(
 	if amount is None:
 		amount = 0
 
-	if decimal_str:
+	if number_format.decimal_separator:
 		decimals_after = str(round(amount % 1, precision))
 		parts = decimals_after.split(".")
 		parts = parts[1] if len(parts) > 1 else parts[0]
@@ -1388,7 +1412,7 @@ def fmt_money(
 					fraction = frappe.db.get_value("Currency", currency, "fraction_units", cache=True) or 100
 					precision = len(cstr(fraction)) - 1
 				else:
-					precision = number_format_precision
+					precision = number_format.precision
 			elif len(decimals) < precision:
 				precision = len(decimals)
 
@@ -1410,7 +1434,7 @@ def fmt_money(
 		parts.append(amount[-3:])
 		amount = amount[:-3]
 
-		val = number_format == "#,##,###.##" and 2 or 3
+		val = 2 if number_format.string == "#,##,###.##" else 3
 
 		while len(amount) > val:
 			parts.append(amount[-val:])
@@ -1420,7 +1444,10 @@ def fmt_money(
 
 	parts.reverse()
 
-	amount = comma_str.join(parts) + ((precision and decimal_str) and (decimal_str + decimals) or "")
+	amount = number_format.thousands_separator.join(parts) + (
+		((precision and number_format.decimal_separator) and (number_format.decimal_separator + decimals))
+		or ""
+	)
 	if amount != "0":
 		amount = minus + amount
 
@@ -1436,29 +1463,24 @@ def fmt_money(
 	return amount
 
 
-number_format_info = {
-	"#,###.##": (".", ",", 2),
-	"#.###,##": (",", ".", 2),
-	"# ###.##": (".", " ", 2),
-	"# ###,##": (",", " ", 2),
-	"#'###.##": (".", "'", 2),
-	"#, ###.##": (".", ", ", 2),
-	"#,##,###.##": (".", ",", 2),
-	"#,###.###": (".", ",", 3),
-	"#.###": ("", ".", 0),
-	"#,###": ("", ",", 0),
-	"#.########": (".", "", 8),
-}
+from frappe.deprecation_dumpster import get_number_format_info
 
 
-def get_number_format_info(format: str) -> tuple[str, str, int]:
-	"""Return the decimal separator, thousands separator and precision for the given number `format` string.
+def __getattr__(name):
+	if name == "number_format_info":
+		from frappe.deprecation_dumpster import deprecation_warning
+		from frappe.utils.number_format import NUMBER_FORMAT_MAP
 
-	e.g. get_number_format_info('1,00,000.50') -> ('.', ',', 2)
-
-	Will return ('.', ',', 2) for format strings which can't be guessed.
-	"""
-	return number_format_info.get(format) or (".", ",", 2)
+		deprecation_warning(
+			"unkown",
+			"v16",
+			"use frappe.utils.number_format.NUMBER_FORMAT_MAP instead of frappe.utils.data.number_format_info",
+		)
+	else:
+		try:
+			globals()[name]
+		except KeyError:
+			raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 #
@@ -1487,18 +1509,16 @@ def money_in_words(
 	d = get_defaults()
 	if not main_currency:
 		main_currency = d.get("currency", "INR")
+
 	if not fraction_currency:
 		fraction_currency = frappe.db.get_value("Currency", main_currency, "fraction", cache=True) or _(
 			"Cent"
 		)
 
-	number_format = (
-		frappe.db.get_value("Currency", main_currency, "number_format", cache=True)
-		or frappe.db.get_default("number_format")
-		or "#,###.##"
-	)
+	number_format = get_number_format()
 
-	fraction_length = get_number_format_info(number_format)[2]
+	fraction_units = frappe.db.get_value("Currency", main_currency, "fraction_units", cache=True)
+	fraction_length = math.ceil(math.log10(fraction_units)) or number_format.precision
 
 	n = f"%.{fraction_length}f" % number
 
@@ -1510,29 +1530,23 @@ def money_in_words(
 		fraction += zeros
 
 	in_million = True
-	if number_format == "#,##,###.##":
+	if number_format.string == "#,##,###.##":
 		in_million = False
 
-	# 0.00
-	if main == "0" and fraction in ["00", "000"]:
-		out = _(main_currency, context="Currency") + " " + _("Zero")
-	# 0.XX
-	elif main == "0":
-		out = _(in_words(fraction, in_million).title()) + " " + fraction_currency
-	else:
-		out = _(main_currency, context="Currency") + " " + _(in_words(main, in_million).title())
-		if cint(fraction):
-			out = (
-				out
-				+ " "
-				+ _("and")
-				+ " "
-				+ _(in_words(fraction, in_million).title())
-				+ " "
-				+ fraction_currency
-			)
+	def fraction_in_words() -> str:
+		return in_words(float(f"0.{fraction}") * fraction_units, in_million).title()
 
-	return out + " " + _("only.")
+	# 0.00
+	if main == "0" and fraction in ["0", "00", "000"]:
+		out = _(main_currency, context="Currency") + " " + _("Zero")
+	elif main == "0":
+		out = f"{fraction_in_words()} {fraction_currency}"
+	else:
+		out = _(main_currency, context="Currency") + " " + in_words(main, in_million).title()
+		if cint(fraction):
+			out = out + " " + _("and") + " " + fraction_in_words() + " " + fraction_currency
+
+	return _("{0} only.", context="Money in words").format(out)
 
 
 #
@@ -1689,8 +1703,8 @@ def pretty_date(iso_datetime: datetime.datetime | str) -> str:
 	from babel.dates import format_timedelta
 
 	if isinstance(iso_datetime, str):
-		iso_datetime = datetime.datetime.strptime(iso_datetime, DATETIME_FORMAT)
-	now_dt = datetime.datetime.strptime(now(), DATETIME_FORMAT)
+		iso_datetime = get_datetime(iso_datetime)
+	now_dt = now_datetime()
 	locale = frappe.local.lang.replace("-", "_") if frappe.local.lang else None
 	return format_timedelta(iso_datetime - now_dt, add_direction=True, locale=locale)
 
@@ -1722,7 +1736,7 @@ def comma_sep(some_list: list | tuple, pattern: str, add_quotes=True) -> str:
 
 	e.g. if `some_list` is ['a', 'b', 'c'] and `pattern` is '{0} or {1}', the output will be 'a, b or c'
 	"""
-	if isinstance(some_list, (list, tuple)):
+	if isinstance(some_list, list | tuple):
 		# list(some_list) is done to preserve the existing list
 		some_list = [str(s) for s in list(some_list)]
 		if not some_list:
@@ -1730,7 +1744,9 @@ def comma_sep(some_list: list | tuple, pattern: str, add_quotes=True) -> str:
 		elif len(some_list) == 1:
 			return some_list[0]
 		else:
-			some_list = ["'%s'" % s for s in some_list] if add_quotes else ["%s" % s for s in some_list]
+			some_list = (
+				["'{}'".format(s) for s in some_list] if add_quotes else ["{}".format(s) for s in some_list]
+			)
 			return pattern.format(", ".join(frappe._(s) for s in some_list[:-1]), some_list[-1])
 	else:
 		return some_list
@@ -1741,7 +1757,7 @@ def new_line_sep(some_list: list | tuple) -> str:
 
 	e.g. ['', 'Paid', 'Unpaid'] -> '\n Paid\n Unpaid'
 	"""
-	if isinstance(some_list, (list, tuple)):
+	if isinstance(some_list, list | tuple):
 		# list(some_list) is done to preserve the existing list
 		some_list = [str(s) for s in list(some_list)]
 		if not some_list:
@@ -1749,7 +1765,7 @@ def new_line_sep(some_list: list | tuple) -> str:
 		elif len(some_list) == 1:
 			return some_list[0]
 		else:
-			some_list = ["%s" % s for s in some_list]
+			some_list = ["{}".format(s) for s in some_list]
 			return format("\n ".join(some_list))
 	else:
 		return some_list
@@ -1802,9 +1818,12 @@ def get_url(uri: str | None = None, full_address: bool = False) -> str:
 	if not uri and full_address:
 		uri = frappe.get_request_header("REQUEST_URI", "")
 
-	port = frappe.conf.http_port or frappe.conf.webserver_port
+	port = frappe.conf.http_port
+	if not port and frappe.conf.developer_mode:
+		port = frappe.conf.webserver_port
 
 	if (
+		# XXX: This config is used as proxy for "is production mode enabled?"
 		not frappe.conf.restart_supervisor_on_update
 		and not frappe.conf.restart_systemd_on_update
 		and host_name
@@ -1819,9 +1838,7 @@ def get_url(uri: str | None = None, full_address: bool = False) -> str:
 def get_host_name_from_request() -> str:
 	"""Return the hostname (`request.host`) from the request headers."""
 	if hasattr(frappe.local, "request") and frappe.local.request and frappe.local.request.host:
-		protocol = (
-			"https://" if "https" == frappe.get_request_header("X-Forwarded-Proto", "") else "http://"
-		)
+		protocol = "https://" if "https" == frappe.get_request_header("X-Forwarded-Proto", "") else "http://"
 		return protocol + frappe.local.request.host
 
 
@@ -1842,14 +1859,16 @@ def get_host_name() -> str:
 	return get_url().rsplit("//", 1)[-1]
 
 
-def get_link_to_form(doctype: str, name: str, label: str | None = None) -> str:
+def get_link_to_form(doctype: str, name: str | None = None, label: str | None = None) -> str:
 	"""Return the HTML link to the given document's form view.
 
 	e.g. get_link_to_form("Sales Invoice", "INV-0001", "Link Label") returns:
 	    '<a href="https://frappe.io/app/sales-invoice/INV-0001">Link Label</a>'.
 	"""
+	from frappe import _
+
 	if not label:
-		label = name
+		label = name or _(doctype)
 
 	return f"""<a href="{get_url_to_form(doctype, name)}">{label}</a>"""
 
@@ -1874,7 +1893,8 @@ def get_link_to_report(
 		for k, v in filters.items():
 			if isinstance(v, list):
 				conditions.extend(
-					str(k) + "=" + '["' + str(value[0] + '"' + "," + '"' + str(value[1]) + '"]') for value in v
+					str(k) + "=" + '["' + str(value[0] + '"' + "," + '"' + str(value[1]) + '"]')
+					for value in v
 				)
 			else:
 				conditions.append(str(k) + "=" + str(v))
@@ -1896,13 +1916,18 @@ def get_absolute_url(doctype: str, name: str) -> str:
 	return f"/app/{quoted(slug(doctype))}/{quoted(name)}"
 
 
-def get_url_to_form(doctype: str, name: str) -> str:
+def get_url_to_form(doctype: str, name: str | None = None) -> str:
 	"""Return the absolute URL for the form view of the given document in the desk.
 
 	e.g. when doctype="Sales Invoice" and your site URL is "https://frappe.io",
 	         returns 'https://frappe.io/app/sales-invoice/INV-00001'
 	"""
-	return get_url(uri=f"/app/{quoted(slug(doctype))}/{quoted(name)}")
+	if not name:
+		uri = f"/app/{quoted(slug(doctype))}"
+	else:
+		uri = f"/app/{quoted(slug(doctype))}/{quoted(name)}"
+
+	return get_url(uri=uri)
 
 
 def get_url_to_list(doctype: str) -> str:
@@ -1952,6 +1977,25 @@ def sql_like(value: str, pattern: str) -> bool:
 		return pattern in value
 
 
+def filter_operator_is(value: str, pattern: str) -> bool:
+	"""Operator `is` can have two values: 'set' or 'not set'."""
+	pattern = pattern.lower()
+
+	def is_set():
+		if value is None:
+			return False
+		elif isinstance(value, str) and not value:
+			return False
+		return True
+
+	if pattern == "set":
+		return is_set()
+	elif pattern == "not set":
+		return not is_set()
+	else:
+		frappe.throw(frappe._(f"Invalid argument for operator 'IS': {pattern}"))
+
+
 operator_map = {
 	# startswith
 	"^": lambda a, b: (a or "").startswith(b),
@@ -1969,22 +2013,18 @@ operator_map = {
 	"None": lambda a, b: a is None,
 	"like": sql_like,
 	"not like": lambda a, b: not sql_like(a, b),
+	"is": filter_operator_is,
 }
 
 
-def evaluate_filters(doc, filters: dict | list | tuple):
+def evaluate_filters(doc: "Mapping", filters: FilterSignature):
 	"""Return True if doc matches filters."""
-	if isinstance(filters, dict):
-		for key, value in filters.items():
-			f = get_filter(None, {key: value})
-			if not compare(doc.get(f.fieldname), f.operator, f.value, f.fieldtype):
-				return False
-
-	elif isinstance(filters, (list, tuple)):
-		for d in filters:
-			f = get_filter(None, d)
-			if not compare(doc.get(f.fieldname), f.operator, f.value, f.fieldtype):
-				return False
+	if not isinstance(filters, Filters):
+		filters = Filters(filters, doctype=doc.get("doctype"))
+	for d in filters:
+		f = get_filter(None, d)
+		if not compare(doc.get(f.fieldname), f.operator, f.value, f.fieldtype):
+			return False
 
 	return True
 
@@ -1999,7 +2039,7 @@ def compare(val1: Any, condition: str, val2: Any, fieldtype: str | None = None):
 	return False
 
 
-def get_filter(doctype: str, f: dict | list | tuple, filters_config=None) -> "frappe._dict":
+def get_filter(doctype: str, filters: FilterSignature, filters_config=None) -> "frappe._dict":
 	"""Return a `_dict` like:
 
 	{
@@ -2013,29 +2053,17 @@ def get_filter(doctype: str, f: dict | list | tuple, filters_config=None) -> "fr
 	from frappe.database.utils import NestedSetHierarchy
 	from frappe.model import child_table_fields, default_fields, optional_fields
 
-	if isinstance(f, dict):
-		key, value = next(iter(f.items()))
-		f = make_filter_tuple(doctype, key, value)
+	ft: FilterTuple
+	if isinstance(filters, FilterTuple):
+		ft = filters
+	elif not isinstance(filters, Filters):
+		ft = Filters(filters, doctype=doctype)[0]
+	else:
+		ft = filters[0]
 
-	if not isinstance(f, (list, tuple)):
-		frappe.throw(frappe._("Filter must be a tuple or list (in a list)"))
-
-	if len(f) == 3:
-		f = (doctype, f[0], f[1], f[2])
-	elif len(f) > 4:
-		f = f[0:4]
-	elif len(f) != 4:
-		frappe.throw(
-			frappe._("Filter must have 4 values (doctype, fieldname, operator, value): {0}").format(str(f))
-		)
-
-	f = frappe._dict(doctype=f[0], fieldname=f[1], operator=f[2], value=f[3])
+	f = frappe._dict(doctype=ft[0], fieldname=ft[1], operator=ft[2], value=ft[3])
 
 	sanitize_column(f.fieldname)
-
-	if not f.operator:
-		# if operator is missing
-		f.operator = "="
 
 	valid_operators = (
 		"=",
@@ -2053,7 +2081,8 @@ def get_filter(doctype: str, f: dict | list | tuple, filters_config=None) -> "fr
 		"timespan",
 		"previous",
 		"next",
-	) + NestedSetHierarchy
+		*NestedSetHierarchy,
+	)
 
 	if filters_config:
 		additional_operators = [key.lower() for key in filters_config]
@@ -2066,7 +2095,6 @@ def get_filter(doctype: str, f: dict | list | tuple, filters_config=None) -> "fr
 		# verify fieldname belongs to the doctype
 		meta = frappe.get_meta(f.doctype)
 		if not meta.has_field(f.fieldname):
-
 			# try and match the doctype name from child tables
 			for df in meta.get_table_fields():
 				if frappe.get_meta(df.options).has_field(f.fieldname):
@@ -2085,7 +2113,7 @@ def get_filter(doctype: str, f: dict | list | tuple, filters_config=None) -> "fr
 
 def make_filter_tuple(doctype, key, value):
 	"""return a filter tuple like [doctype, key, operator, value]"""
-	if isinstance(value, (list, tuple)):
+	if isinstance(value, list | tuple):
 		return [doctype, key, value[0], value[1]]
 	else:
 		return [doctype, key, "=", value]
@@ -2103,12 +2131,17 @@ def make_filter_dict(filters):
 
 
 def sanitize_column(column_name: str) -> None:
+	return _sanitize_column(column_name, (frappe.db and frappe.db.db_type) or None)
+
+
+@lru_cache(maxsize=1024)
+def _sanitize_column(column_name: str, db_type: str) -> None:
 	import sqlparse
 
 	from frappe import _
 
 	column_name = sqlparse.format(column_name, strip_comments=True, keyword_case="lower")
-	if frappe.db and frappe.db.db_type == "mariadb":
+	if db_type == "mariadb":
 		# strip mariadb specific comments which are like python single line comments
 		column_name = MARIADB_SPECIFIC_COMMENT.sub("", column_name)
 
@@ -2127,7 +2160,7 @@ def sanitize_column(column_name: str) -> None:
 	def _raise_exception():
 		frappe.throw(_("Invalid field name {0}").format(column_name), frappe.DataError)
 
-	regex = re.compile("^.*[,'();].*")
+	regex = re.compile("^.*[,'();\n].*")
 	if "ifnull" in column_name:
 		if regex.match(column_name):
 			# to avoid and, or
@@ -2136,6 +2169,11 @@ def sanitize_column(column_name: str) -> None:
 
 			# to avoid select, delete, drop, update and case
 			elif any(keyword in column_name.split() for keyword in blacklisted_keywords):
+				_raise_exception()
+
+			elif any(
+				re.search(rf"\b{keyword}\b", column_name, re.IGNORECASE) for keyword in blacklisted_keywords
+			):
 				_raise_exception()
 
 	elif regex.match(column_name):
@@ -2275,6 +2313,13 @@ def generate_hash(*args, **kwargs) -> str:
 	return frappe.generate_hash(*args, **kwargs)
 
 
+def sha256_hash(input: str | bytes) -> str:
+	"""Return hash of the string using sha256 algorithm."""
+	if isinstance(input, str):
+		input = input.encode()
+	return hashlib.sha256(input).hexdigest()
+
+
 def dict_with_keys(dict, keys):
 	"""Return a new dict with a subset of keys."""
 	out = {}
@@ -2396,9 +2441,7 @@ def get_user_info_for_avatar(user_id: str) -> _UserInfo:
 		return {"email": user_id, "image": "", "name": user_id}
 
 
-def validate_python_code(
-	string: str, fieldname: str | None = None, is_expression: bool = True
-) -> None:
+def validate_python_code(string: str, fieldname: str | None = None, is_expression: bool = True) -> None:
 	"""Validate python code fields by using compile_command to ensure that expression is valid python.
 
 	args:
@@ -2435,10 +2478,13 @@ class UnicodeWithAttrs(str):
 		self.metadata = text.metadata
 
 
-def format_timedelta(o: datetime.timedelta) -> str:
-	# mariadb allows a wide diff range - https://mariadb.com/kb/en/time/
-	# but frappe doesnt - i think via babel : only allows 0..23 range for hour
-	total_seconds = o.total_seconds()
+def format_timedelta(o: datetime.timedelta | str) -> str:
+	# MariaDB allows a wide range - https://mariadb.com/kb/en/time/
+	# but Frappe doesn't - I think via babel : only allows 0..23 range for hour
+	if isinstance(o, datetime.timedelta):
+		total_seconds = o.total_seconds()
+	else:
+		total_seconds = cint(o)
 	hours, remainder = divmod(total_seconds, 3600)
 	minutes, seconds = divmod(remainder, 60)
 	rounded_seconds = round(seconds, 6)
@@ -2462,7 +2508,7 @@ def parse_timedelta(s: str) -> datetime.timedelta:
 	return datetime.timedelta(**{key: float(val) for key, val in m.groupdict().items()})
 
 
-def get_job_name(key: str, doctype: str = None, doc_name: str = None) -> str:
+def get_job_name(key: str, doctype: str | None = None, doc_name: str | None = None) -> str:
 	job_name = key
 	if doctype:
 		job_name += f"_{doctype}"
@@ -2492,23 +2538,122 @@ def is_site_link(link: str) -> bool:
 	return urlparse(link).netloc == urlparse(frappe.utils.get_url()).netloc
 
 
-def add_trackers_to_url(url: str, source: str, campaign: str, medium: str = "email") -> str:
+def add_trackers_to_url(
+	url: str,
+	source: str,
+	campaign: str | None = None,
+	medium: str | None = None,
+	content: str | None = None,
+) -> str:
+	def get_utm_values():
+		_source = frappe.db.get_value("UTM Source", source, "slug") or source
+		_campaign = frappe.db.get_value("UTM Campaign", campaign, "slug") or campaign
+		_medium = frappe.db.get_value("UTM Medium", medium, "slug") or medium
+		return _source, _medium, _campaign
+
 	url_parts = list(urlparse(url))
 	if url_parts[0] == "mailto":
 		return url
 
-	trackers = {
-		"source": source,
-		"medium": medium,
-	}
+	source, medium, campaign = frappe.cache.get_value(
+		"utm_" + cstr(source) + "_" + cstr(medium) + "_" + cstr(campaign),
+		get_utm_values,
+		shared=True,
+	)
+
+	trackers = {"utm_source": source}
+
+	if medium:
+		trackers["utm_medium"] = medium
 
 	if campaign:
-		trackers["campaign"] = campaign
+		trackers["utm_campaign"] = campaign
+
+	if content:
+		trackers["utm_content"] = content
 
 	query = dict(parse_qsl(url_parts[4])) | trackers
 
 	url_parts[4] = urlencode(query)
 	return urlunparse(url_parts)
+
+
+def parse_and_map_trackers_from_url(url: str, create: bool = False) -> dict:
+	query = urlparse(url).query
+
+	url_trackers = dict(parse_qsl(query))
+
+	return map_trackers(url_trackers, create)
+
+
+def map_trackers(url_trackers: dict, create: bool = False):
+	frappe_trackers = {}
+
+	if url_source := url_trackers.get("utm_source", url_trackers.get("source")):
+		source = frappe.db.get_value("UTM Source", {"slug": slug(url_source)}, "name") or url_source
+		if create and source == url_source and not frappe.db.exists("UTM Source", source):
+			source = frappe.new_doc("UTM Source")
+			source.name = url_source
+			source.description = f"Autogenerated from {url_trackers}"
+			source.save(ignore_permissions=True)
+		frappe_trackers["utm_source"] = source
+
+	if url_medium := url_trackers.get("utm_medium", url_trackers.get("medium")):
+		medium = frappe.db.get_value("UTM Medium", {"slug": slug(url_medium)}, "name") or url_medium
+		if create and medium == url_medium and not frappe.db.exists("UTM Medium", medium):
+			medium = frappe.new_doc("UTM Medium")
+			medium.name = url_medium
+			medium.description = f"Autogenerated from {url_trackers}"
+			medium.save(ignore_permissions=True)
+		frappe_trackers["utm_medium"] = medium
+
+	if url_campaign := url_trackers.get("utm_campaign", url_trackers.get("campaign")):
+		campaign = frappe.db.get_value("UTM Campaign", {"slug": slug(url_campaign)}, "name") or url_campaign
+		if create and campaign == url_campaign and not frappe.db.exists("UTM Campaign", campaign):
+			campaign = frappe.new_doc("UTM Campaign")
+			campaign.name = url_campaign
+			campaign.campaign_description = f"Autogenerated from {url_trackers}"
+			campaign.save(ignore_permissions=True)
+		frappe_trackers["utm_campaign"] = campaign
+
+	if url_content := url_trackers.get("utm_content", url_trackers.get("content")):
+		frappe_trackers["utm_content"] = url_content
+
+	return frappe_trackers
+
+
+def bold(text: str | int | float) -> str:
+	"""Return `text` wrapped in `<strong>` tags."""
+	return f"<strong>{text}</strong>"
+
+
+def safe_encode(param, encoding="utf-8"):
+	try:
+		param = param.encode(encoding)
+	except Exception:
+		pass
+	return param
+
+
+def safe_decode(param, encoding="utf-8", fallback_map: dict | None = None):
+	"""
+	Method to safely decode data into a string
+
+	:param param: The data to be decoded
+	:param encoding: The encoding to decode into
+	:param fallback_map: A fallback map to reference in case of a LookupError
+	:return:
+	"""
+	try:
+		param = param.decode(encoding)
+	except LookupError:
+		try:
+			param = param.decode((fallback_map or {}).get(encoding, "utf-8"))
+		except Exception:
+			pass
+	except Exception:
+		pass
+	return param
 
 
 # This is used in test to count memory overhead of default imports.

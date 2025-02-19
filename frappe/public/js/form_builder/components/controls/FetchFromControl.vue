@@ -63,7 +63,7 @@ let field_df = computedAsync(async () => {
 watch(
 	() => props.value,
 	(value) => {
-		[doctype.value, fieldname.value] = value?.split(".") || ["", ""];
+		if (value) [doctype.value, fieldname.value] = value.split(".") || ["", ""];
 	},
 	{ immediate: true }
 );
@@ -71,7 +71,11 @@ watch(
 watch([() => doctype.value, () => fieldname.value], ([doctype_value, fieldname_value]) => {
 	let [doctype_name, field_name] = props.value?.split(".") || ["", ""];
 	if (doctype_value != doctype_name || fieldname_value != field_name) {
-		emit("update:modelValue", `${doctype_value}.${fieldname_value}`);
+		let fetch_expression = "";
+		if (doctype_value && fieldname_value) {
+			fetch_expression = `${doctype_value}.${fieldname_value}`;
+		}
+		emit("update:modelValue", fetch_expression);
 	}
 });
 </script>

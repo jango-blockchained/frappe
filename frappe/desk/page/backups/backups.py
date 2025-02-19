@@ -10,9 +10,9 @@ from frappe.utils.data import convert_utc_to_system_timezone
 def get_context(context):
 	def get_time(path):
 		dt = os.path.getmtime(path)
-		return convert_utc_to_system_timezone(datetime.datetime.utcfromtimestamp(dt)).strftime(
-			"%a %b %d %H:%M %Y"
-		)
+		return convert_utc_to_system_timezone(
+			datetime.datetime.fromtimestamp(dt, tz=datetime.timezone.utc)
+		).strftime("%a %b %d %H:%M %Y")
 
 	def get_encrytion_status(path):
 		if "-enc" in path:
@@ -28,9 +28,6 @@ def get_context(context):
 	path = get_site_path("private", "backups")
 	files = [x for x in os.listdir(path) if os.path.isfile(os.path.join(path, x))]
 	backup_limit = get_scheduled_backup_limit()
-
-	if len(files) > backup_limit:
-		cleanup_old_backups(path, files, backup_limit)
 
 	files = [
 		(
@@ -95,9 +92,7 @@ def schedule_files_backup(user_email):
 		)
 		frappe.msgprint(_("Queued for backup. You will receive an email with the download link"))
 	else:
-		frappe.msgprint(
-			_("Backup job is already queued. You will receive an email with the download link")
-		)
+		frappe.msgprint(_("Backup job is already queued. You will receive an email with the download link"))
 
 
 def backup_files_and_notify_user(user_email=None):

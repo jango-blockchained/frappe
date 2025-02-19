@@ -26,6 +26,7 @@
   "roles_permissions_tab",
   "sb1",
   "role_profile_name",
+  "role_profiles",
   "roles_html",
   "roles",
   "sb_allow_modules",
@@ -47,7 +48,19 @@
   "desk_settings_section",
   "mute_sounds",
   "desk_theme",
+  "code_editor_type",
   "banner_image",
+  "navigation_settings_section",
+  "search_bar",
+  "notifications",
+  "list_settings_section",
+  "list_sidebar",
+  "bulk_actions",
+  "view_switcher",
+  "form_settings_section",
+  "form_sidebar",
+  "timeline",
+  "dashboard",
   "change_password",
   "new_password",
   "logout_all_sessions",
@@ -70,6 +83,10 @@
   "send_me_a_copy",
   "allowed_in_mentions",
   "user_emails",
+  "workspace_section",
+  "default_workspace",
+  "app_section",
+  "default_app",
   "sb2",
   "defaults",
   "sb3",
@@ -212,9 +229,9 @@
    "read_only": 1
   },
   {
-   "allow_in_quick_entry": 1,
    "fieldname": "role_profile_name",
    "fieldtype": "Link",
+   "hidden": 1,
    "label": "Role Profile",
    "options": "Role Profile",
    "permlevel": 1
@@ -328,6 +345,7 @@
    "hidden": 1,
    "label": "Reset Password Key",
    "no_copy": 1,
+   "permlevel": 1,
    "print_hide": 1,
    "read_only": 1
   },
@@ -393,7 +411,7 @@
   },
   {
    "fieldname": "email_signature",
-   "fieldtype": "Small Text",
+   "fieldtype": "Text Editor",
    "label": "Email Signature",
    "no_copy": 1
   },
@@ -462,7 +480,7 @@
    "read_only": 1
   },
   {
-   "default": "1",
+   "default": "2",
    "fieldname": "simultaneous_sessions",
    "fieldtype": "Int",
    "label": "Simultaneous Sessions"
@@ -575,6 +593,7 @@
    "fieldname": "api_key",
    "fieldtype": "Data",
    "label": "API Key",
+   "no_copy": 1,
    "permlevel": 1,
    "read_only": 1,
    "unique": 1
@@ -626,6 +645,7 @@
    "fieldtype": "Datetime",
    "hidden": 1,
    "label": "Last Reset Password Key Generated On",
+   "permlevel": 1,
    "read_only": 1
   },
   {
@@ -700,6 +720,112 @@
    "fieldtype": "Small Text",
    "hidden": 1,
    "label": "Onboarding Status"
+  },
+  {
+   "allow_in_quick_entry": 1,
+   "fieldname": "role_profiles",
+   "fieldtype": "Table MultiSelect",
+   "label": "Role Profiles",
+   "options": "User Role Profile",
+   "permlevel": 1
+  },
+  {
+   "description": "If left empty, the default workspace will be the last visited workspace",
+   "fieldname": "default_workspace",
+   "fieldtype": "Link",
+   "label": "Default Workspace",
+   "options": "Workspace"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "workspace_section",
+   "fieldtype": "Section Break",
+   "label": "Workspace"
+  },
+  {
+   "default": "vscode",
+   "fieldname": "code_editor_type",
+   "fieldtype": "Select",
+   "label": "Code Editor Type",
+   "options": "vscode\nvim\nemacs"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "app_section",
+   "fieldtype": "Section Break",
+   "label": "App"
+  },
+  {
+   "description": "Redirect to the selected app after login",
+   "fieldname": "default_app",
+   "fieldtype": "Select",
+   "label": "Default App"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "navigation_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Navigation Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "search_bar",
+   "fieldtype": "Check",
+   "label": "Search Bar"
+  },
+  {
+   "default": "1",
+   "fieldname": "notifications",
+   "fieldtype": "Check",
+   "label": "Notifications"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "list_settings_section",
+   "fieldtype": "Section Break",
+   "label": "List Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "list_sidebar",
+   "fieldtype": "Check",
+   "label": "Sidebar"
+  },
+  {
+   "default": "1",
+   "fieldname": "bulk_actions",
+   "fieldtype": "Check",
+   "label": "Bulk Actions"
+  },
+  {
+   "default": "1",
+   "fieldname": "view_switcher",
+   "fieldtype": "Check",
+   "label": "View Switcher"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "form_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Form Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "form_sidebar",
+   "fieldtype": "Check",
+   "label": "Sidebar"
+  },
+  {
+   "default": "1",
+   "fieldname": "timeline",
+   "fieldtype": "Check",
+   "label": "Timeline"
+  },
+  {
+   "default": "1",
+   "fieldname": "dashboard",
+   "fieldtype": "Check",
+   "label": "Dashboard"
   }
  ],
  "icon": "fa fa-user",
@@ -762,7 +888,7 @@
    "link_fieldname": "user"
   }
  ],
- "modified": "2023-09-18 22:19:49.933972",
+ "modified": "2024-12-31 19:35:17.052698",
  "modified_by": "Administrator",
  "module": "Core",
  "name": "User",
@@ -788,7 +914,7 @@
    "write": 1
   },
   {
-   "role": "All",
+   "role": "Desk User",
    "select": 1
   }
  ],
@@ -796,7 +922,7 @@
  "route": "user",
  "search_fields": "full_name",
  "show_name_in_global_search": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "title_field": "full_name",

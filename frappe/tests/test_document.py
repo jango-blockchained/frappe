@@ -9,11 +9,9 @@ from frappe.app import make_form_dict
 from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.desk.doctype.note.note import Note
 from frappe.model.naming import make_autoname, parse_naming_series, revert_series_if_last
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import cint, now_datetime, set_request
 from frappe.website.serve import get_response
-
-from . import update_system_settings
 
 
 class CustomTestNote(Note):
@@ -27,7 +25,7 @@ class CustomNoteWithoutProperty(Note):
 		return now_datetime() - self.creation
 
 
-class TestDocument(FrappeTestCase):
+class TestDocument(IntegrationTestCase):
 	def test_get_return_empty_list_for_table_field_if_none(self):
 		d = frappe.get_doc({"doctype": "User"})
 		self.assertEqual(d.get("roles"), [])
@@ -98,11 +96,47 @@ class TestDocument(FrappeTestCase):
 
 		self.assertEqual(frappe.db.get_value(d.doctype, d.name, "subject"), "subject changed")
 
+	def test_discard_transitions(self):
+		d = self.test_insert()
+		self.assertEqual(d.docstatus, 0)
+
+		# invalid: Submit > Discard, Cancel > Discard
+		d.submit()
+		self.assertRaises(frappe.ValidationError, d.discard)
+		d.reload()
+
+		d.cancel()
+		self.assertRaises(frappe.ValidationError, d.discard)
+
+		# valid: Draft > Discard
+		d2 = self.test_insert()
+		d2.discard()
+		self.assertEqual(d2.docstatus, 2)
+
+	def test_save_on_discard_throws(self):
+		from frappe.desk.doctype.event.event import Event
+
+		d3 = self.test_insert()
+
+		def test_on_discard(d3):
+			d3.subject = d3.subject + "update"
+			d3.save()
+
+		d3.on_discard = (test_on_discard)(d3)
+		d3.on_discard = test_on_discard.__get__(d3, Event)
+
+		self.assertRaises(frappe.ValidationError, d3.discard)
+
 	def test_value_changed(self):
 		d = self.test_insert()
 		d.subject = "subject changed again"
-		d.save()
+		d.load_doc_before_save()
+		d.update_modified()
+
 		self.assertTrue(d.has_value_changed("subject"))
+		self.assertTrue(d.has_value_changed("modified"))
+
+		self.assertFalse(d.has_value_changed("creation"))
 		self.assertFalse(d.has_value_changed("event_type"))
 
 	def test_mandatory(self):
@@ -123,9 +157,7 @@ class TestDocument(FrappeTestCase):
 
 	def test_text_editor_field(self):
 		try:
-			frappe.get_doc(
-				doctype="Activity Log", subject="test", message='<img src="test.png" />'
-			).insert()
+			frappe.get_doc(doctype="Activity Log", subject="test", message='<img src="test.png" />').insert()
 		except frappe.MandatoryError:
 			self.fail("Text Editor false positive mandatory error")
 
@@ -329,7 +361,9 @@ class TestDocument(FrappeTestCase):
 		@contextmanager
 		def customize_note(with_options=False):
 			options = (
-				"frappe.utils.now_datetime() - frappe.utils.get_datetime(doc.creation)" if with_options else ""
+				"frappe.utils.now_datetime() - frappe.utils.get_datetime(doc.creation)"
+				if with_options
+				else ""
 			)
 			custom_field = frappe.get_doc(
 				{
@@ -488,7 +522,7 @@ class TestDocument(FrappeTestCase):
 		self.assertEqual(val, changed_val)
 
 
-class TestDocumentWebView(FrappeTestCase):
+class TestDocumentWebView(IntegrationTestCase):
 	def get(self, path, user="Guest"):
 		frappe.set_user(user)
 		set_request(method="GET", path=path)
@@ -502,13 +536,13 @@ class TestDocumentWebView(FrappeTestCase):
 		document_key = todo.get_document_share_key()
 
 		# with old-style signature key
-		update_system_settings({"allow_older_web_view_links": True}, True)
-		old_document_key = todo.get_signature()
-		url = f"/ToDo/{todo.name}?key={old_document_key}"
-		self.assertEqual(self.get(url).status, "200 OK")
+		with self.change_settings("System Settings", {"allow_older_web_view_links": True}):
+			old_document_key = todo.get_signature()
+			url = f"/ToDo/{todo.name}?key={old_document_key}"
+			self.assertEqual(self.get(url).status, "200 OK")
 
-		update_system_settings({"allow_older_web_view_links": False}, True)
-		self.assertEqual(self.get(url).status, "401 UNAUTHORIZED")
+		with self.change_settings("System Settings", {"allow_older_web_view_links": False}):
+			self.assertEqual(self.get(url).status, "403 FORBIDDEN")
 
 		# with valid key
 		url = f"/ToDo/{todo.name}?key={document_key}"
@@ -516,7 +550,7 @@ class TestDocumentWebView(FrappeTestCase):
 
 		# with invalid key
 		invalid_key_url = f"/ToDo/{todo.name}?key=INVALID_KEY"
-		self.assertEqual(self.get(invalid_key_url).status, "401 UNAUTHORIZED")
+		self.assertEqual(self.get(invalid_key_url).status, "403 FORBIDDEN")
 
 		# expire the key
 		document_key_doc = frappe.get_doc("Document Share Key", {"key": document_key})

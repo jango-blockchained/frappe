@@ -67,7 +67,7 @@ frappe.ui.form.ControlAutocomplete = class ControlAutoComplete extends frappe.ui
 					d.label = d.value;
 				}
 
-				var _label = me.translate_values ? __(d.label) : d.label;
+				var _label = me.translate_values ? __(d.label, null, d.parent) : d.label;
 				var html = "<strong>" + _label + "</strong>";
 				if (d.description) {
 					html += '<br><span class="small">' + __(d.description) + "</span>";
@@ -90,16 +90,13 @@ frappe.ui.form.ControlAutocomplete = class ControlAutoComplete extends frappe.ui
 
 		$(this.input_area).find(".awesomplete ul").css("min-width", "100%");
 
-		this.$input.on(
-			"input",
-			frappe.utils.debounce((e) => {
-				if (this.get_query || this.df.get_query) {
-					this.execute_query_if_exists(e.target.value);
-				} else {
-					this.awesomplete.list = this.get_data();
-				}
-			}, 500)
-		);
+		this.$input.on("input", (e) => {
+			if (this.get_query || this.df.get_query) {
+				this.execute_query_if_exists(e.target.value);
+			} else {
+				this.awesomplete.list = this.get_data();
+			}
+		});
 
 		this.$input.on("focus", () => {
 			if (!this.$input.val()) {

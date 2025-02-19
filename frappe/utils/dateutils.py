@@ -5,6 +5,7 @@ import datetime
 
 import frappe
 import frappe.defaults
+from frappe.locale import get_date_format
 from frappe.utils import add_to_date, get_datetime, getdate
 from frappe.utils.data import (
 	get_first_day,
@@ -54,9 +55,7 @@ def parse_date(date):
 		date = date.split(" ", 1)[0]
 
 	# why the sorting? checking should be done in a predictable order
-	check_formats = [None] + sorted(
-		list(dateformats), reverse=not get_user_date_format().startswith("dd")
-	)
+	check_formats = [None, *sorted(list(dateformats), reverse=not get_user_date_format().startswith("dd"))]
 
 	for f in check_formats:
 		try:
@@ -68,9 +67,8 @@ def parse_date(date):
 
 	if not parsed_date:
 		raise Exception(
-			"""Cannot understand date - '%s'.
-			Try formatting it like your default format - '%s'"""
-			% (date, get_user_date_format())
+			f"""Cannot understand date - '{date}'.
+			Try formatting it like your default format - '{get_user_date_format()}'"""
 		)
 
 	return parsed_date
@@ -78,7 +76,7 @@ def parse_date(date):
 
 def get_user_date_format():
 	if getattr(frappe.local, "user_date_format", None) is None:
-		frappe.local.user_date_format = frappe.defaults.get_global_default("date_format") or "yyyy-mm-dd"
+		frappe.local.user_date_format = get_date_format()
 
 	return frappe.local.user_date_format
 
@@ -115,9 +113,7 @@ def get_dates_from_timegrain(from_date, to_date, timegrain="Daily"):
 		if "Weekly" == timegrain:
 			date = get_last_day_of_week(add_to_date(dates[-1], years=years, months=months, days=days))
 		else:
-			date = get_period_ending(
-				add_to_date(dates[-1], years=years, months=months, days=days), timegrain
-			)
+			date = get_period_ending(add_to_date(dates[-1], years=years, months=months, days=days), timegrain)
 		dates.append(date)
 	return dates
 

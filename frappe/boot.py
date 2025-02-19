@@ -4,10 +4,13 @@
 bootstrap client session
 """
 
+import os
+
 import frappe
 import frappe.defaults
 import frappe.desk.desk_page
 from frappe.core.doctype.navbar_settings.navbar_settings import get_app_logo, get_navbar_settings
+from frappe.desk.doctype.changelog_feed.changelog_feed import get_changelog_feed_items
 from frappe.desk.doctype.form_tour.form_tour import get_onboarding_ui_tours
 from frappe.desk.doctype.route_history.route_history import frequently_visited_links
 from frappe.desk.form.load import get_meta_bundle
@@ -23,6 +26,7 @@ from frappe.social.doctype.energy_point_settings.energy_point_settings import (
 )
 from frappe.utils import add_user_info, cstr, get_system_timezone
 from frappe.utils.change_log import get_versions
+from frappe.utils.frappecloud import on_frappecloud
 from frappe.website.doctype.web_page_view.web_page_view import is_tracking_enabled
 
 
@@ -45,7 +49,6 @@ def get_bootinfo():
 
 	if frappe.session["user"] != "Guest":
 		bootinfo.user_info = get_user_info()
-		bootinfo.sid = frappe.session["sid"]
 
 	bootinfo.modules = {}
 	bootinfo.module_list = []
@@ -97,6 +100,7 @@ def get_bootinfo():
 	bootinfo.update(get_email_accounts(user=frappe.session.user))
 	bootinfo.energy_points_enabled = is_energy_point_enabled()
 	bootinfo.website_tracking_enabled = is_tracking_enabled()
+	bootinfo.sms_gateway_enabled = bool(frappe.db.get_single_value("SMS Settings", "sms_gateway_url"))
 	bootinfo.points = get_energy_points(frappe.session.user)
 	bootinfo.frequently_visited_links = frequently_visited_links()
 	bootinfo.link_preview_doctypes = get_link_preview_doctypes()
@@ -107,13 +111,23 @@ def get_bootinfo():
 	bootinfo.translated_doctypes = get_translated_doctypes()
 	bootinfo.subscription_conf = add_subscription_conf()
 	bootinfo.marketplace_apps = get_marketplace_apps()
+	bootinfo.changelog_feed = get_changelog_feed_items()
+	bootinfo.enable_address_autocompletion = frappe.db.get_single_value(
+		"Geolocation Settings", "enable_address_autocompletion"
+	)
+
+	if sentry_dsn := get_sentry_dsn():
+		bootinfo.sentry_dsn = sentry_dsn
 
 	return bootinfo
 
 
 def get_letter_heads():
 	letter_heads = {}
-	for letter_head in frappe.get_all("Letter Head", fields=["name", "content", "footer"]):
+
+	if not frappe.has_permission("Letter Head"):
+		return letter_heads
+	for letter_head in frappe.get_list("Letter Head", fields=["name", "content", "footer"]):
 		letter_heads.setdefault(
 			letter_head.name, {"header": letter_head.content, "footer": letter_head.footer}
 		)
@@ -125,7 +139,7 @@ def load_conf_settings(bootinfo):
 	from frappe.core.api.file import get_max_file_size
 
 	bootinfo.max_file_size = get_max_file_size()
-	for key in ("developer_mode", "socketio_port", "file_watcher_port"):
+	for key in ("developer_mode", "socketio_port", "file_watcher_port", "fc_communication_secret"):
 		if key in frappe.conf:
 			bootinfo[key] = frappe.conf.get(key)
 
@@ -133,9 +147,63 @@ def load_conf_settings(bootinfo):
 def load_desktop_data(bootinfo):
 	from frappe.desk.desktop import get_workspace_sidebar_items
 
-	bootinfo.allowed_workspaces = get_workspace_sidebar_items().get("pages")
+	bootinfo.sidebar_pages = get_workspace_sidebar_items()
+	allowed_pages = [d.name for d in bootinfo.sidebar_pages.get("pages")]
 	bootinfo.module_wise_workspaces = get_controller("Workspace").get_module_wise_workspaces()
 	bootinfo.dashboards = frappe.get_all("Dashboard")
+	bootinfo.app_data = []
+
+	Workspace = frappe.qb.DocType("Workspace")
+	Module = frappe.qb.DocType("Module Def")
+
+	for app_name in frappe.get_installed_apps():
+		# get app details from app_info (/apps)
+		apps = frappe.get_hooks("add_to_apps_screen", app_name=app_name)
+		app_info = {}
+		if apps:
+			app_info = apps[0]
+			has_permission = app_info.get("has_permission")
+			if has_permission and not frappe.get_attr(has_permission)():
+				continue
+
+		workspaces = [
+			r[0]
+			for r in (
+				frappe.qb.from_(Workspace)
+				.inner_join(Module)
+				.on(Workspace.module == Module.name)
+				.select(Workspace.name)
+				.where(Module.app_name == app_name)
+				.run()
+			)
+			if r[0] in allowed_pages
+		]
+
+		bootinfo.app_data.append(
+			dict(
+				app_name=app_info.get("name") or app_name,
+				app_title=app_info.get("title")
+				or (
+					(
+						frappe.get_hooks("app_title", app_name=app_name)
+						and frappe.get_hooks("app_title", app_name=app_name)[0]
+					)
+					or ""
+				)
+				or app_name,
+				app_route=(
+					frappe.get_hooks("app_home", app_name=app_name)
+					and frappe.get_hooks("app_home", app_name=app_name)[0]
+				)
+				or (workspaces and "/app/" + frappe.utils.slug(workspaces[0]))
+				or "",
+				app_logo_url=app_info.get("logo")
+				or frappe.get_hooks("app_logo_url", app_name=app_name)
+				or frappe.get_hooks("app_logo_url", app_name="frappe"),
+				modules=[m.name for m in frappe.get_all("Module Def", dict(app_name=app_name))],
+				workspaces=workspaces,
+			)
+		)
 
 
 def get_allowed_pages(cache=False):
@@ -162,7 +230,9 @@ def get_user_pages_or_reports(parent, cache=False):
 	page = DocType("Page")
 	report = DocType("Report")
 
-	if parent == "Report":
+	is_report = parent == "Report"
+
+	if is_report:
 		columns = (report.name.as_("title"), report.ref_doctype, report.report_type)
 	else:
 		columns = (page.title.as_("title"),)
@@ -176,9 +246,7 @@ def get_user_pages_or_reports(parent, cache=False):
 		frappe.qb.from_(customRole)
 		.from_(hasRole)
 		.from_(parentTable)
-		.select(
-			customRole[parent.lower()].as_("name"), customRole.modified, customRole.ref_doctype, *columns
-		)
+		.select(customRole[parent.lower()].as_("name"), customRole.modified, customRole.ref_doctype, *columns)
 		.where(
 			(hasRole.parent == customRole.name)
 			& (parentTable.name == customRole[parent.lower()])
@@ -201,14 +269,12 @@ def get_user_pages_or_reports(parent, cache=False):
 		.from_(parentTable)
 		.select(parentTable.name.as_("name"), parentTable.modified, *columns)
 		.where(
-			(hasRole.role.isin(roles))
-			& (hasRole.parent == parentTable.name)
-			& (parentTable.name.notin(subq))
+			(hasRole.role.isin(roles)) & (hasRole.parent == parentTable.name) & (parentTable.name.notin(subq))
 		)
 		.distinct()
 	)
 
-	if parent == "Report":
+	if is_report:
 		pages_with_standard_roles = pages_with_standard_roles.where(report.disabled == 0)
 
 	pages_with_standard_roles = pages_with_standard_roles.run(as_dict=True)
@@ -223,20 +289,20 @@ def get_user_pages_or_reports(parent, cache=False):
 		frappe.qb.from_(hasRole).select(Count("*")).where(hasRole.parent == parentTable.name)
 	)
 
-	# pages with no role are allowed
-	if parent == "Page":
+	# pages and reports with no role are allowed
+	rows_with_no_roles = (
+		frappe.qb.from_(parentTable)
+		.select(parentTable.name, parentTable.modified, *columns)
+		.where(no_of_roles == 0)
+	).run(as_dict=True)
 
-		pages_with_no_roles = (
-			frappe.qb.from_(parentTable)
-			.select(parentTable.name, parentTable.modified, *columns)
-			.where(no_of_roles == 0)
-		).run(as_dict=True)
+	for r in rows_with_no_roles:
+		if r.name not in has_role:
+			has_role[r.name] = {"modified": r.modified, "title": r.title}
+			if is_report:
+				has_role[r.name] |= {"ref_doctype": r.ref_doctype}
 
-		for p in pages_with_no_roles:
-			if p.name not in has_role:
-				has_role[p.name] = {"modified": p.modified, "title": p.title}
-
-	elif parent == "Report":
+	if is_report:
 		if not has_permission("Report", print_logs=False):
 			return {}
 
@@ -319,25 +385,6 @@ def load_print_css(bootinfo, print_settings):
 	)
 
 
-def get_unseen_notes():
-	note = DocType("Note")
-	nsb = DocType("Note Seen By").as_("nsb")
-
-	return (
-		frappe.qb.from_(note)
-		.select(note.name, note.title, note.content, note.notify_on_every_login)
-		.where(
-			(note.notify_on_login == 1)
-			& (note.expire_notification_on > frappe.utils.now())
-			& (
-				ParameterizedValueWrapper(frappe.session.user).notin(
-					SubQuery(frappe.qb.from_(nsb).select(nsb.user).where(nsb.parent == note.name))
-				)
-			)
-		)
-	).run(as_dict=1)
-
-
 def get_success_action():
 	return frappe.get_all("Success Action", fields=["*"])
 
@@ -374,16 +421,9 @@ def add_layouts(bootinfo):
 
 
 def get_desk_settings():
-	role_list = frappe.get_all("Role", fields=["*"], filters=dict(name=["in", frappe.get_roles()]))
-	desk_settings = {}
+	from frappe.core.doctype.user.user import desk_properties
 
-	from frappe.core.doctype.role.role import desk_properties
-
-	for role in role_list:
-		for key in desk_properties:
-			desk_settings[key] = desk_settings.get(key) or role.get(key)
-
-	return desk_settings
+	return frappe.get_value("User", frappe.session.user, desk_properties, as_dict=True)
 
 
 def get_notification_settings():
@@ -445,7 +485,7 @@ def get_marketplace_apps():
 	apps = []
 	cache_key = "frappe_marketplace_apps"
 
-	if frappe.conf.developer_mode:
+	if frappe.conf.developer_mode or not on_frappecloud():
 		return apps
 
 	def get_apps_from_fc():
@@ -455,12 +495,12 @@ def get_marketplace_apps():
 		return request.json()["message"]
 
 	try:
-		apps = frappe.cache().get_value(cache_key, get_apps_from_fc, shared=True)
+		apps = frappe.cache.get_value(cache_key, get_apps_from_fc, shared=True)
 		installed_apps = set(frappe.get_installed_apps())
 		apps = [app for app in apps if app["name"] not in installed_apps]
 	except Exception:
 		# Don't retry for a day
-		frappe.cache().set_value(cache_key, apps, shared=True, expires_in_sec=24 * 60 * 60)
+		frappe.cache.set_value(cache_key, apps, shared=True, expires_in_sec=24 * 60 * 60)
 
 	return apps
 
@@ -470,3 +510,10 @@ def add_subscription_conf():
 		return frappe.conf.subscription
 	except Exception:
 		return ""
+
+
+def get_sentry_dsn():
+	if not frappe.get_system_settings("enable_telemetry"):
+		return
+
+	return os.getenv("FRAPPE_SENTRY_DSN")

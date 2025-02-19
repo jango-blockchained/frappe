@@ -62,12 +62,14 @@ frappe.ui.FilterGroup = class {
 	}
 
 	set_popover_events() {
-		$(document.body).on("click", (e) => {
+		$(document.body).on("mousedown", (e) => {
 			if (this.wrapper && this.wrapper.is(":visible")) {
 				const in_datepicker =
 					$(e.target).is(".datepicker--cell") ||
 					$(e.target).closest(".datepicker--nav-title").length !== 0 ||
-					$(e.target).parents(".datepicker--nav-action").length !== 0;
+					$(e.target).parents(".datepicker--nav-action").length !== 0 ||
+					$(e.target).parents(".datepicker").length !== 0 ||
+					$(e.target).is(".datepicker--button");
 
 				if (
 					$(e.target).parents(".filter-popover").length === 0 &&
@@ -128,7 +130,7 @@ frappe.ui.FilterGroup = class {
 	update_filter_button() {
 		const filters_applied = this.filters.length > 0;
 		const button_label = filters_applied
-			? __("Filters <span class='filter-label'>{0}</span>", [this.filters.length])
+			? __("Filters {0}", [`<span class="filter-label">${this.filters.length}</span>`])
 			: __("Filter");
 
 		this.filter_button

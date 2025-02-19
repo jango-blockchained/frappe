@@ -5,6 +5,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.custom.doctype.property_setter.property_setter import delete_property_setter
 from frappe.model import core_doctypes_list
 from frappe.model.docfield import supports_translation
 from frappe.model.document import Document
@@ -89,7 +90,7 @@ class CustomField(Document):
 		in_list_view: DF.Check
 		in_preview: DF.Check
 		in_standard_filter: DF.Check
-		insert_after: DF.Literal
+		insert_after: DF.Literal[None]
 		is_system_generated: DF.Check
 		is_virtual: DF.Check
 		label: DF.Data | None
@@ -101,6 +102,7 @@ class CustomField(Document):
 		non_negative: DF.Check
 		options: DF.SmallText | None
 		permlevel: DF.Int
+		placeholder: DF.Data | None
 		precision: DF.Literal["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 		print_hide: DF.Check
 		print_hide_if_no_value: DF.Check
@@ -110,11 +112,13 @@ class CustomField(Document):
 		report_hide: DF.Check
 		reqd: DF.Check
 		search_index: DF.Check
+		show_dashboard: DF.Check
 		sort_options: DF.Check
 		translatable: DF.Check
 		unique: DF.Check
 		width: DF.Data | None
 	# end: auto-generated types
+
 	def autoname(self):
 		self.set_fieldname()
 		self.name = self.dt + "-" + self.fieldname
@@ -219,12 +223,10 @@ class CustomField(Document):
 			)
 
 		# delete property setter entries
-		frappe.db.delete("Property Setter", {"doc_type": self.dt, "field_name": self.fieldname})
+		delete_property_setter(self.dt, field_name=self.fieldname)
 
 		# update doctype layouts
-		doctype_layouts = frappe.get_all(
-			"DocType Layout", filters={"document_type": self.dt}, pluck="name"
-		)
+		doctype_layouts = frappe.get_all("DocType Layout", filters={"document_type": self.dt}, pluck="name")
 
 		for layout in doctype_layouts:
 			layout_doc = frappe.get_doc("DocType Layout", layout)
@@ -248,6 +250,21 @@ class CustomField(Document):
 		if self.fieldname == self.insert_after:
 			frappe.throw(_("Insert After cannot be set as {0}").format(meta.get_label(self.insert_after)))
 
+	def get_permission_log_options(self, event=None):
+		if event != "after_delete" and self.fieldtype not in (
+			"Section Break",
+			"Column Break",
+			"Tab Break",
+			"Fold",
+		):
+			return {
+				"fields": ("ignore_user_permissions", "permlevel"),
+				"for_doctype": "DocType",
+				"for_document": self.dt,
+			}
+
+		self._no_perm_log = True
+
 
 @frappe.whitelist()
 def get_fields_label(doctype=None):
@@ -260,7 +277,7 @@ def get_fields_label(doctype=None):
 		return frappe.msgprint(_("Custom Fields can only be added to a standard DocType."))
 
 	return [
-		{"value": df.fieldname or "", "label": _(df.label) if df.label else ""}
+		{"value": df.fieldname or "", "label": _(df.label, context=df.parent) if df.label else ""}
 		for df in frappe.get_meta(doctype).get("fields")
 	]
 
@@ -370,13 +387,12 @@ def rename_fieldname(custom_field: str, fieldname: str):
 	field.db_set("fieldname", field.fieldname, notify=True)
 	_update_fieldname_references(field, old_fieldname, new_fieldname)
 
+	frappe.msgprint(_("Custom field renamed to {0} successfully.").format(fieldname), alert=True)
 	frappe.db.commit()
 	frappe.clear_cache()
 
 
-def _update_fieldname_references(
-	field: CustomField, old_fieldname: str, new_fieldname: str
-) -> None:
+def _update_fieldname_references(field: CustomField, old_fieldname: str, new_fieldname: str) -> None:
 	# Passwords are stored in auth table, so column name needs to be updated there.
 	if field.fieldtype == "Password":
 		Auth = frappe.qb.Table("__Auth")

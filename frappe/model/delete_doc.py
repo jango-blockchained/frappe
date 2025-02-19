@@ -55,7 +55,7 @@ def delete_doc(
 		# already deleted..?
 		if not frappe.db.exists(doctype, name):
 			if not ignore_missing:
-				raise frappe.DoesNotExistError
+				raise frappe.DoesNotExistError(doctype=doctype)
 			else:
 				return False
 
@@ -65,7 +65,6 @@ def delete_doc(
 		doc = None
 		if doctype == "DocType":
 			if for_reload:
-
 				try:
 					doc = frappe.get_doc(doctype, name)
 				except frappe.DoesNotExistError:
@@ -92,7 +91,10 @@ def delete_doc(
 				frappe.conf.developer_mode
 				and not doc.custom
 				and not (
-					for_reload or frappe.flags.in_migrate or frappe.flags.in_install or frappe.flags.in_uninstall
+					for_reload
+					or frappe.flags.in_migrate
+					or frappe.flags.in_install
+					or frappe.flags.in_uninstall
 				)
 			):
 				try:
@@ -102,6 +104,16 @@ def delete_doc(
 					pass
 
 		else:
+			# Lock the doc without waiting
+			try:
+				frappe.db.get_value(doctype, name, for_update=True, wait=False)
+			except frappe.QueryTimeoutError:
+				frappe.throw(
+					_(
+						"This document can not be deleted right now as it's being modified by another user. Please try again after some time."
+					),
+					exc=frappe.QueryTimeoutError,
+				)
 			doc = frappe.get_doc(doctype, name)
 
 			if not for_reload:
@@ -115,8 +127,17 @@ def delete_doc(
 
 				# check if links exist
 				if not force:
-					check_if_doc_is_linked(doc)
-					check_if_doc_is_dynamically_linked(doc)
+					try:
+						check_if_doc_is_linked(doc)
+						check_if_doc_is_dynamically_linked(doc)
+					except frappe.LinkExistsError as e:
+						if doc.meta.has_field("enabled") or doc.meta.has_field("disabled"):
+							frappe.throw(
+								_("You can disable this {0} instead of deleting it.").format(_(doctype)),
+								frappe.LinkExistsError,
+							)
+						else:
+							raise e
 
 			update_naming_series(doc)
 			delete_from_table(doctype, name, ignore_doctypes, doc)
@@ -133,6 +154,7 @@ def delete_doc(
 					doctype=doc.doctype,
 					name=doc.name,
 					now=frappe.flags.in_test,
+					enqueue_after_commit=True,
 				)
 
 		# clear cache for Document
@@ -161,13 +183,11 @@ def add_to_deleted_document(doc):
 	"""Add this document to Deleted Document table. Called after delete"""
 	if doc.doctype != "Deleted Document" and frappe.flags.in_install != "frappe":
 		frappe.get_doc(
-			dict(
-				doctype="Deleted Document",
-				deleted_doctype=doc.doctype,
-				deleted_name=doc.name,
-				data=doc.as_json(),
-				owner=frappe.session.user,
-			)
+			doctype="Deleted Document",
+			deleted_doctype=doc.doctype,
+			deleted_name=doc.name,
+			data=doc.as_json(),
+			owner=frappe.session.user,
 		).db_insert()
 
 
@@ -215,18 +235,14 @@ def update_flags(doc, flags=None, ignore_permissions=False):
 
 def check_permission_and_not_submitted(doc):
 	# permission
-	if (
-		not doc.flags.ignore_permissions
-		and frappe.session.user != "Administrator"
-		and (not doc.has_permission("delete") or (doc.doctype == "DocType" and not doc.custom))
-	):
-		frappe.msgprint(
-			_("User not allowed to delete {0}: {1}").format(doc.doctype, doc.name),
-			raise_exception=frappe.PermissionError,
-		)
+	if not doc.flags.ignore_permissions and frappe.session.user != "Administrator":
+		if doc.doctype == "DocType" and not doc.custom:
+			frappe.throw(_("Only the Administrator can delete a standard DocType."))
+		else:
+			doc.check_permission("delete")
 
 	# check if submitted
-	if doc.docstatus.is_submitted():
+	if doc.meta.is_submittable and doc.docstatus.is_submitted():
 		frappe.msgprint(
 			_("{0} {1}: Submitted Record cannot be deleted. You must {2} Cancel {3} it first.").format(
 				_(doc.doctype),
@@ -299,7 +315,6 @@ def check_if_doc_is_linked(doc, method="Delete"):
 def check_if_doc_is_dynamically_linked(doc, method="Delete"):
 	"""Raise `frappe.LinkExistsError` if the document is dynamically linked"""
 	for df in get_dynamic_link_map().get(doc.doctype, []):
-
 		ignore_linked_doctypes = doc.get("ignore_linked_doctypes") or []
 
 		if df.parent in frappe.get_hooks("ignore_links_on_delete") or (
@@ -328,9 +343,7 @@ def check_if_doc_is_dynamically_linked(doc, method="Delete"):
 			df["table"] = ", `parent`, `parenttype`, `idx`" if meta.istable else ""
 			for refdoc in frappe.db.sql(
 				"""select `name`, `docstatus` {table} from `tab{parent}` where
-				{options}=%s and {fieldname}=%s""".format(
-					**df
-				),
+				`{options}`=%s and `{fieldname}`=%s""".format(**df),
 				(doc.doctype, doc.name),
 				as_dict=True,
 			):
@@ -354,10 +367,8 @@ def check_if_doc_is_dynamically_linked(doc, method="Delete"):
 
 
 def raise_link_exists_exception(doc, reference_doctype, reference_docname, row=""):
-	doc_link = '<a href="/app/Form/{0}/{1}">{1}</a>'.format(doc.doctype, doc.name)
-	reference_link = '<a href="/app/Form/{0}/{1}">{1}</a>'.format(
-		reference_doctype, reference_docname
-	)
+	doc_link = f'<a href="/app/Form/{doc.doctype}/{doc.name}">{doc.name}</a>'
+	reference_link = f'<a href="/app/Form/{reference_doctype}/{reference_docname}">{reference_docname}</a>'
 
 	# hack to display Single doctype only once in message
 	if reference_doctype == reference_docname:
@@ -409,14 +420,12 @@ def clear_references(
 	reference_name_field="reference_name",
 ):
 	frappe.db.sql(
-		"""update
-			`tab{0}`
+		f"""update
+			`tab{doctype}`
 		set
-			{1}=NULL, {2}=NULL
+			{reference_doctype_field}=NULL, {reference_name_field}=NULL
 		where
-			{1}=%s and {2}=%s""".format(
-			doctype, reference_doctype_field, reference_name_field
-		),  # nosec
+			{reference_doctype_field}=%s and {reference_name_field}=%s""",  # nosec
 		(reference_doctype, reference_name),
 	)
 

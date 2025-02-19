@@ -1,6 +1,7 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import _socket
 import datetime
 import email
 import email.utils
@@ -9,11 +10,11 @@ import json
 import poplib
 import re
 import ssl
-import time
 from contextlib import suppress
+from email.errors import HeaderParseError
 from email.header import decode_header
+from urllib.parse import unquote
 
-import _socket
 import chardet
 from email_reply_parser import EmailReplyParser
 
@@ -44,6 +45,10 @@ poplib._MAXLINE = 1_00_000
 
 THREAD_ID_PATTERN = re.compile(r"(?<=\[)[\w/-]+")
 WORDS_PATTERN = re.compile(r"\w+")
+
+ALTERNATE_CHARSET_MAP = {
+	"windows-874": "cp874",
+}
 
 
 class EmailSizeExceededError(frappe.ValidationError):
@@ -152,7 +157,7 @@ class EmailServer:
 
 	def select_imap_folder(self, folder):
 		res = self.imap.select(f'"{folder}"')
-		return res[0] == "OK"  # The folder exsits TODO: handle other resoponses too
+		return res[0] == "OK"  # The folder exists TODO: handle other responses too
 
 	def logout(self):
 		if cint(self.settings.use_imap):
@@ -191,7 +196,7 @@ class EmailServer:
 		if cint(self.settings.use_imap):
 			self.check_imap_uidvalidity(folder)
 
-			readonly = False if self.settings.email_sync_rule == "UNSEEN" else True
+			readonly = self.settings.email_sync_rule != "UNSEEN"
 
 			self.imap.select(folder, readonly=readonly)
 			response, message = self.imap.uid("search", None, self.settings.email_sync_rule)
@@ -214,32 +219,35 @@ class EmailServer:
 
 		if not uid_validity or uid_validity != current_uid_validity:
 			# uidvalidity changed & all email uids are reindexed by server
-			Communication = frappe.qb.DocType("Communication")
-			frappe.qb.update(Communication).set(Communication.uid, -1).where(
-				Communication.communication_medium == "Email"
-			).where(Communication.email_account == self.settings.email_account).run()
+			frappe.db.set_value(
+				"Communication",
+				{"communication_medium": "Email", "email_account": self.settings.email_account},
+				"uid",
+				-1,
+				update_modified=False,
+			)
 
 			if self.settings.use_imap:
 				# Remove {"} quotes that are added to handle spaces in IMAP Folder names
 				if folder[0] == folder[-1] == '"':
 					folder = folder[1:-1]
-				# new update for the IMAP Folder DocType
-				IMAPFolder = frappe.qb.DocType("IMAP Folder")
-				frappe.qb.update(IMAPFolder).set(IMAPFolder.uidvalidity, current_uid_validity).set(
-					IMAPFolder.uidnext, uidnext
-				).where(IMAPFolder.parent == self.settings.email_account_name).where(
-					IMAPFolder.folder_name == folder
-				).run()
+
+				frappe.db.set_value(
+					"IMAP Folder",
+					{"parent": self.settings.email_account_name, "folder_name": folder},
+					{"uidvalidity": current_uid_validity, "uidnext": uidnext},
+					update_modified=False,
+				)
 			else:
-				EmailAccount = frappe.qb.DocType("Email Account")
-				frappe.qb.update(EmailAccount).set(EmailAccount.uidvalidity, current_uid_validity).set(
-					EmailAccount.uidnext, uidnext
-				).where(EmailAccount.name == self.settings.email_account_name).run()
+				frappe.db.set_value(
+					"Email Account",
+					self.settings.email_account_name,
+					{"uidvalidity": current_uid_validity, "uidnext": uidnext},
+					update_modified=False,
+				)
 
 			sync_count = 100 if uid_validity else int(self.settings.initial_sync_count)
-			from_uid = (
-				1 if uidnext < (sync_count + 1) or (uidnext - sync_count) < 1 else uidnext - sync_count
-			)
+			from_uid = 1 if uidnext < (sync_count + 1) or (uidnext - sync_count) < 1 else uidnext - sync_count
 			# sync last 100 email
 			self.settings.email_sync_rule = f"UID {from_uid}:{uidnext}"
 			self.uid_reindexed = True
@@ -248,10 +256,7 @@ class EmailServer:
 		pattern = rf"(?<={cmd} )[0-9]*"
 		match = re.search(pattern, response.decode("utf-8"), re.U | re.I)
 
-		if match:
-			return match.group(0)
-		else:
-			return None
+		return match[0] if match else None
 
 	def retrieve_message(self, uid, msg_num):
 		try:
@@ -270,7 +275,7 @@ class EmailServer:
 
 		except Exception as e:
 			if self.has_login_limit_exceeded(e):
-				raise LoginLimitExceeded(e)
+				raise LoginLimitExceeded(e) from e
 
 			frappe.log_error("Unable to fetch email", self.make_error_msg(uid, msg_num))
 
@@ -278,7 +283,7 @@ class EmailServer:
 
 	def get_email_seen_status(self, uid, flag_string):
 		"""parse the email FLAGS response"""
-		if not flag_string:
+		if not flag_string or not isinstance(flag_string, str | bytes):
 			return None
 
 		flags = []
@@ -298,20 +303,18 @@ class EmailServer:
 		with suppress(Exception):
 			if not cint(self.settings.use_imap):
 				self.pop.dele(msg_num)
-			else:
-				# mark as seen if email sync rule is UNSEEN (syncing only unseen mails)
-				if self.settings.email_sync_rule == "UNSEEN":
-					self.imap.uid("STORE", uid, "+FLAGS", "(\\SEEN)")
+			elif self.settings.email_sync_rule == "UNSEEN":
+				self.imap.uid("STORE", uid, "+FLAGS", "(\\SEEN)")
 
 	def is_temporary_system_problem(self, e):
 		messages = (
 			"-ERR [SYS/TEMP] Temporary system problem. Please try again later.",
 			"Connection timed out",
 		)
-		for message in messages:
-			if message in strip(cstr(e)) or message in strip(cstr(getattr(e, "strerror", ""))):
-				return True
-		return False
+		return any(
+			message in strip(cstr(e)) or message in strip(cstr(getattr(e, "strerror", "")))
+			for message in messages
+		)
 
 	def make_error_msg(self, uid, msg_num):
 		partial_mail = None
@@ -326,14 +329,16 @@ class EmailServer:
 			partial_mail = Email(headers)
 
 		if partial_mail:
-			return (
-				"\nDate: {date}\nFrom: {from_email}\nSubject: {subject}\n\n\nTraceback: \n{traceback}".format(
-					date=partial_mail.date,
-					from_email=partial_mail.from_email,
-					subject=partial_mail.subject,
-					traceback=traceback,
-				)
-			)
+			return f"""
+Date: {partial_mail.date}
+From: {partial_mail.from_email}
+Subject: {partial_mail.subject}
+
+
+Traceback:
+{traceback}
+"""
+
 		return traceback
 
 	def update_flag(self, folder, uid_list=None):
@@ -384,7 +389,7 @@ class Email:
 		if self.mail["Date"]:
 			try:
 				utc = email.utils.mktime_tz(email.utils.parsedate_tz(self.mail["Date"]))
-				utc_dt = datetime.datetime.utcfromtimestamp(utc)
+				utc_dt = datetime.datetime.fromtimestamp(utc, tz=datetime.timezone.utc)
 				self.date = convert_utc_to_system_timezone(utc_dt).strftime("%Y-%m-%d %H:%M:%S")
 			except Exception:
 				self.date = now()
@@ -408,9 +413,9 @@ class Email:
 		_subject = decode_header(self.mail.get("Subject", "No Subject"))
 		self.subject = _subject[0][0] or ""
 
-		if _subject[0][1]:
+		if charset := _subject[0][1]:
 			# Encoding is known by decode_header (might also be unknown-8bit)
-			self.subject = safe_decode(self.subject, _subject[0][1])
+			self.subject = safe_decode(self.subject, charset, ALTERNATE_CHARSET_MAP)
 
 		if isinstance(self.subject, bytes):
 			# Fall back to utf-8 if the charset is unknown or decoding fails
@@ -419,10 +424,7 @@ class Email:
 
 		# Convert non-string (e.g. None)
 		# Truncate to 140 chars (can be used as a document name)
-		self.subject = str(self.subject).strip()[:140]
-
-		if not self.subject:
-			self.subject = "No Subject"
+		self.subject = str(self.subject).strip()[:140] or "No Subject"
 
 	def set_from(self):
 		# gmail mailing-list compatibility
@@ -430,7 +432,9 @@ class Email:
 		_from_email = self.decode_email(self.mail.get("X-Original-From") or self.mail["From"])
 		_reply_to = self.decode_email(self.mail.get("Reply-To"))
 
-		if _reply_to and not frappe.db.get_value("Email Account", {"email_id": _reply_to}, "email_id"):
+		if _reply_to and not frappe.db.get_value(
+			"Email Account", {"email_id": _reply_to, "enable_incoming": 1}, "email_id"
+		):
 			self.from_email = extract_email_id(_reply_to)
 		else:
 			self.from_email = extract_email_id(_from_email)
@@ -441,13 +445,19 @@ class Email:
 		self.from_real_name = parse_addr(_from_email)[0] if "@" in _from_email else _from_email
 
 	@staticmethod
-	def decode_email(email):
+	def decode_email(email: bytes | str | None) -> str | None:
 		if not email:
 			return
+		email = frappe.as_unicode(email).replace('"', " ").replace("'", " ")
+		try:
+			parts = decode_header(email)
+		except HeaderParseError:
+			# Fallback: grab just the email addresses
+			emails = re.findall(r"(<.*?>)", email)
+			return ", ".join(emails)
+
 		decoded = ""
-		for part, encoding in decode_header(
-			frappe.as_unicode(email).replace('"', " ").replace("'", " ")
-		):
+		for part, encoding in parts:
 			if encoding:
 				decoded += part.decode(encoding, "replace")
 			else:
@@ -505,20 +515,19 @@ class Email:
 			self.html_content += markdown(text_content)
 
 	def get_charset(self, part):
-		"""Detect charset."""
-		charset = part.get_content_charset()
-		if not charset:
-			charset = chardet.detect(safe_encode(cstr(part)))["encoding"]
-
-		return charset
+		return part.get_content_charset() or chardet.detect(safe_encode(cstr(part)))["encoding"]
 
 	def get_payload(self, part):
 		charset = self.get_charset(part)
-
 		try:
 			return str(part.get_payload(decode=True), str(charset), "ignore")
 		except LookupError:
-			return part.get_payload()
+			try:
+				return str(
+					part.get_payload(decode=True), ALTERNATE_CHARSET_MAP.get(charset, "utf-8"), "ignore"
+				)
+			except Exception:
+				return part.get_payload()
 
 	def get_attachment(self, part):
 		# charset = self.get_charset(part)
@@ -560,7 +569,7 @@ class Email:
 				_file = frappe.get_doc(
 					{
 						"doctype": "File",
-						"file_name": attachment["fname"],
+						"file_name": unquote(attachment["fname"]),
 						"attached_to_doctype": doc.doctype,
 						"attached_to_name": doc.name,
 						"is_private": 1,
@@ -587,7 +596,7 @@ class Email:
 	def get_thread_id(self):
 		"""Extract thread ID from `[]`"""
 		l = THREAD_ID_PATTERN.findall(self.subject)
-		return l and l[0] or None
+		return (l and l[0]) or None
 
 	def is_reply(self):
 		return bool(self.in_reply_to)
@@ -672,8 +681,8 @@ class InboundMail(Email):
 		# replace inline images
 		content = self.content
 		for file in attachments:
-			if file.name in self.cid_map and self.cid_map[file.name]:
-				content = content.replace(f"cid:{self.cid_map[file.name]}", file.file_url)
+			if self.cid_map.get(file.name):
+				content = content.replace(f"cid:{self.cid_map[file.name]}", file.unique_url)
 		return content
 
 	def is_notification(self):
@@ -850,9 +859,7 @@ class InboundMail(Email):
 	@staticmethod
 	def get_users_linked_to_account(email_account):
 		"""Get list of users who linked to Email account."""
-		users = frappe.get_all(
-			"User Email", filters={"email_account": email_account.name}, fields=["parent"]
-		)
+		users = frappe.get_all("User Email", filters={"email_account": email_account.name}, fields=["parent"])
 		return list({user.get("parent") for user in users})
 
 	@staticmethod

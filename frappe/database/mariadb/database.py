@@ -1,4 +1,5 @@
 import re
+from contextlib import contextmanager
 
 import pymysql
 from pymysql.constants import ER, FIELD_TYPE
@@ -96,6 +97,10 @@ class MariaDBExceptionUtil:
 			and isinstance(e, pymysql.IntegrityError)
 		)
 
+	@staticmethod
+	def is_interface_error(e: pymysql.Error):
+		return isinstance(e, pymysql.InterfaceError)
+
 
 class MariaDBConnectionUtil:
 	def get_connection(self):
@@ -115,19 +120,24 @@ class MariaDBConnectionUtil:
 
 	def get_connection_settings(self) -> dict:
 		conn_settings = {
-			"host": self.host,
 			"user": self.user,
-			"password": self.password,
 			"conv": self.CONVERSION_MAP,
 			"charset": "utf8mb4",
 			"use_unicode": True,
 		}
 
-		if self.user not in (frappe.flags.root_login, "root"):
+		if self.cur_db_name:
 			conn_settings["database"] = self.cur_db_name
 
-		if self.port:
-			conn_settings["port"] = int(self.port)
+		if self.socket:
+			conn_settings["unix_socket"] = self.socket
+		else:
+			conn_settings["host"] = self.host
+			if self.port:
+				conn_settings["port"] = int(self.port)
+
+		if self.password:
+			conn_settings["password"] = self.password
 
 		if frappe.conf.local_infile:
 			conn_settings["local_infile"] = frappe.conf.local_infile
@@ -155,11 +165,11 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 		self.db_type = "mariadb"
 		self.type_map = {
 			"Currency": ("decimal", "21,9"),
-			"Int": ("int", "11"),
+			"Int": ("int", None),
 			"Long Int": ("bigint", "20"),
 			"Float": ("decimal", "21,9"),
 			"Percent": ("decimal", "21,9"),
-			"Check": ("int", "1"),
+			"Check": ("tinyint", None),
 			"Small Text": ("text", ""),
 			"Long Text": ("longtext", ""),
 			"Code": ("longtext", ""),
@@ -218,7 +228,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 
 	@staticmethod
 	def escape(s, percent=True):
-		"""Excape quotes and percent in given string."""
+		"""Escape quotes and percent in given string."""
 		# Update: We've scrapped PyMySQL in favour of MariaDB's official Python client
 		# Also, given we're promoting use of the PyPika builder via frappe.qb, the use
 		# of this method should be limited.
@@ -282,7 +292,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 				`name` VARCHAR(255) NOT NULL,
 				`fieldname` VARCHAR(140) NOT NULL,
 				`password` TEXT NOT NULL,
-				`encrypted` INT(1) NOT NULL DEFAULT 0,
+				`encrypted` TINYINT NOT NULL DEFAULT 0,
 				PRIMARY KEY (`doctype`, `name`, `fieldname`)
 			) ENGINE=InnoDB ROW_FORMAT=DYNAMIC CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci"""
 		)
@@ -290,20 +300,18 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 	def create_global_search_table(self):
 		if "__global_search" not in self.get_tables():
 			self.sql(
-				"""create table __global_search(
+				f"""create table __global_search(
 				doctype varchar(100),
-				name varchar({0}),
-				title varchar({0}),
+				name varchar({self.VARCHAR_LEN}),
+				title varchar({self.VARCHAR_LEN}),
 				content text,
 				fulltext(content),
-				route varchar({0}),
-				published int(1) not null default 0,
+				route varchar({self.VARCHAR_LEN}),
+				published TINYINT not null default 0,
 				unique `doctype_name` (doctype, name))
 				COLLATE=utf8mb4_unicode_ci
 				ENGINE=MyISAM
-				CHARACTER SET=utf8mb4""".format(
-					self.VARCHAR_LEN
-				)
+				CHARACTER SET=utf8mb4"""
 			)
 
 	def create_user_settings_table(self):
@@ -323,7 +331,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 	def get_table_columns_description(self, table_name):
 		"""Return list of columns with descriptions."""
 		return self.sql(
-			"""select
+			f"""select
 			column_name as 'name',
 			column_type as 'type',
 			column_default as 'default',
@@ -339,9 +347,8 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 			column_key = 'UNI' as 'unique',
 			(is_nullable = 'NO') AS 'not_nullable'
 			from information_schema.columns as columns
-			where table_name = '{table_name}' """.format(
-				table_name=table_name
-			),
+			where table_name = '{table_name}'
+   			and table_schema = '{frappe.db.cur_db_name}' """,
 			as_dict=1,
 		)
 
@@ -356,21 +363,18 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 			.where(
 				(information_schema.columns.table_name == table)
 				& (information_schema.columns.column_name == column)
+				& (information_schema.columns.table_schema == self.cur_db_name)
 			)
 			.run(pluck=True)[0]
 		)
 
 	def has_index(self, table_name, index_name):
 		return self.sql(
-			"""SHOW INDEX FROM `{table_name}`
-			WHERE Key_name='{index_name}'""".format(
-				table_name=table_name, index_name=index_name
-			)
+			f"""SHOW INDEX FROM `{table_name}`
+			WHERE Key_name='{index_name}'"""
 		)
 
-	def get_column_index(
-		self, table_name: str, fieldname: str, unique: bool = False
-	) -> frappe._dict | None:
+	def get_column_index(self, table_name: str, fieldname: str, unique: bool = False) -> frappe._dict | None:
 		"""Check if column exists for a specific fields in specified order.
 
 		This differs from db.has_index because it doesn't rely on index name but columns inside an
@@ -382,6 +386,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 				WHERE Column_name = "{fieldname}"
 					AND Seq_in_index = 1
 					AND Non_unique={int(not unique)}
+					AND Index_type != 'FULLTEXT'
 				""",
 			as_dict=True,
 		)
@@ -399,7 +404,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 			if not clustered_index:
 				return index
 
-	def add_index(self, doctype: str, fields: list, index_name: str = None):
+	def add_index(self, doctype: str, fields: list, index_name: str | None = None):
 		"""Creates an index with given fields if not already created.
 		Index name will be `fieldname1_fieldname2_index`"""
 		index_name = index_name or self.get_index_name(fields)
@@ -407,9 +412,8 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 		if not self.has_index(table_name, index_name):
 			self.commit()
 			self.sql(
-				"""ALTER TABLE `%s`
-				ADD INDEX `%s`(%s)"""
-				% (table_name, index_name, ", ".join(fields))
+				"""ALTER TABLE `{}`
+				ADD INDEX `{}`({})""".format(table_name, index_name, ", ".join(fields))
 			)
 
 	def add_unique(self, doctype, fields, constraint_name=None):
@@ -425,9 +429,8 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 		):
 			self.commit()
 			self.sql(
-				"""alter table `tab%s`
-					add unique `%s`(%s)"""
-				% (doctype, constraint_name, ", ".join(fields))
+				"""alter table `tab{}`
+					add unique `{}`({})""".format(doctype, constraint_name, ", ".join(fields))
 			)
 
 	def updatedb(self, doctype, meta=None):
@@ -445,7 +448,6 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 			db_table = MariaDBTable(doctype, meta)
 			db_table.validate()
 
-			self.commit()
 			db_table.sync()
 			self.commit()
 
@@ -457,7 +459,7 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 		to_query = not cached
 
 		if cached:
-			tables = frappe.cache.get_value("db_tables")
+			tables = frappe.client_cache.get_value("db_tables")
 			to_query = not tables
 
 		if to_query:
@@ -466,10 +468,10 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 			tables = (
 				frappe.qb.from_(information_schema.tables)
 				.select(information_schema.tables.table_name)
-				.where(information_schema.tables.table_schema != "information_schema")
+				.where(information_schema.tables.table_schema == frappe.db.cur_db_name)
 				.run(pluck=True)
 			)
-			frappe.cache.set_value("db_tables", tables)
+			frappe.client_cache.set_value("db_tables", tables)
 
 		return tables
 
@@ -525,3 +527,27 @@ class MariaDBDatabase(MariaDBConnectionUtil, MariaDBExceptionUtil, Database):
 
 		if est_row_size:
 			return int(est_row_size[0][0])
+
+	@contextmanager
+	def unbuffered_cursor(self):
+		from pymysql.cursors import SSCursor
+
+		try:
+			if not self._conn:
+				self.connect()
+
+			original_cursor = self._cursor
+			new_cursor = self._cursor = self._conn.cursor(SSCursor)
+			yield
+		finally:
+			self._cursor = original_cursor
+			new_cursor.close()
+
+	def estimate_count(self, doctype: str):
+		"""Get estimated count of total rows in a table."""
+		from frappe.utils.data import cint
+
+		table = get_table_name(doctype)
+
+		count = self.sql("select table_rows from information_schema.tables where table_name = %s", table)
+		return cint(count[0][0]) if count else 0

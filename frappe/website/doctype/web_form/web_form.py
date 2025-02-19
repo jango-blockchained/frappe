@@ -10,6 +10,7 @@ from frappe.core.api.file import get_max_file_size
 from frappe.core.doctype.file.utils import remove_file_by_url
 from frappe.desk.form.meta import get_code_files_via_hooks
 from frappe.modules.utils import export_module_json, get_doc_module
+from frappe.permissions import check_doctype_permission
 from frappe.rate_limiter import rate_limit
 from frappe.utils import dict_with_keys, strip_html
 from frappe.utils.caching import redis_cache
@@ -34,15 +35,18 @@ class WebForm(WebsiteGenerator):
 		allow_incomplete: DF.Check
 		allow_multiple: DF.Check
 		allow_print: DF.Check
+		allowed_embedding_domains: DF.SmallText | None
 		anonymous: DF.Check
 		apply_document_permissions: DF.Check
 		banner_image: DF.AttachImage | None
 		breadcrumbs: DF.Code | None
 		button_label: DF.Data | None
 		client_script: DF.Code | None
-		condition: DF.Code | None
+		condition_json: DF.JSON | None
 		custom_css: DF.Code | None
 		doc_type: DF.Link
+		hide_footer: DF.Check
+		hide_navbar: DF.Check
 		introduction_text: DF.TextEditor | None
 		is_standard: DF.Check
 		list_columns: DF.Table[WebFormListColumn]
@@ -66,6 +70,7 @@ class WebForm(WebsiteGenerator):
 		web_form_fields: DF.Table[WebFormField]
 		website_sidebar: DF.Link | None
 	# end: auto-generated types
+
 	website = frappe._dict(no_cache=1)
 
 	def validate(self):
@@ -153,6 +158,8 @@ def get_context(context):
 
 		# check permissions
 		if frappe.form_dict.name:
+			assert isinstance(frappe.form_dict.name, str | int)
+
 			if frappe.session.user == "Guest":
 				frappe.throw(
 					_("You need to be logged in to access this {0}.").format(self.doc_type),
@@ -160,9 +167,11 @@ def get_context(context):
 				)
 
 			if not frappe.db.exists(self.doc_type, frappe.form_dict.name):
+				check_doctype_permission(self.doc_type)
 				raise frappe.PageDoesNotExistError()
 
 			if not self.has_web_form_permission(self.doc_type, frappe.form_dict.name):
+				check_doctype_permission(self.doc_type)
 				frappe.throw(
 					_("You don't have the permissions to access this document"), frappe.PermissionError
 				)
@@ -255,7 +264,7 @@ def get_context(context):
 			description = self.introduction_text[:140]
 
 		context.metatags = {
-			"name": self.meta_title or self.title,
+			"title": self.meta_title or self.title,
 			"description": description,
 			"image": self.meta_image,
 		}
@@ -264,6 +273,21 @@ def get_context(context):
 		messages = [
 			"Sr",
 			"Attach",
+			"Next",
+			"Previous",
+			"Discard?",
+			"Cancel",
+			"Discard:Button in web form",
+			"Edit:Button in web form",
+			"See previous responses:Button in web form",
+			"Edit your response:Button in web form",
+			"Are you sure you want to discard the changes?",
+			"Mandatory fields required::Error message in web form",
+			"Invalid values for fields::Error message in web form",
+			"Error:Title of error message in web form",
+			"Page {0} of {1}",
+			"Couldn't save, please check the data you have entered",
+			"Validation Error",
 			self.title,
 			self.introduction_text,
 			self.success_title,
@@ -279,11 +303,55 @@ def get_context(context):
 			if field.fieldtype == "Select" and field.options:
 				messages.extend(field.options.split("\n"))
 
+		# When at least one field in self.web_form_fields has fieldtype "Table" then add "No data" to messages
+		if any(field.fieldtype == "Table" for field in self.web_form_fields):
+			messages.append("Move")
+			messages.append("Insert Above")
+			messages.append("Insert Below")
+			messages.append("Duplicate")
+			messages.append("Shortcuts")
+			messages.append("Ctrl + Up")
+			messages.append("Ctrl + Down")
+			messages.append("ESC")
+			messages.append("Editing Row")
+			messages.append("Add / Remove Columns")
+			messages.append("Fieldname")
+			messages.append("Column Width")
+			messages.append("Configure Columns")
+			messages.append("Select Fields")
+			messages.append("Select All")
+			messages.append("Update")
+			messages.append("Reset to default")
+			messages.append("No Data")
+			messages.append("Delete")
+			messages.append("Delete All")
+			messages.append("Add Row")
+			messages.append("Add Multiple")
+			messages.append("Download")
+			messages.append("of")
+			messages.append("Upload")
+			messages.append("Last")
+			messages.append("First")
+			messages.append("No.:Title of the 'row number' column")
+
+		# Phone Picker
+		if any(field.fieldtype == "Phone" for field in self.web_form_fields):
+			messages.append("Search for countries...")
+
+		# Dates
+		if any(field.fieldtype == "Date" for field in self.web_form_fields):
+			messages.append("Now")
+			messages.append("Today")
+			messages.append("Date {0} must be in format: {1}")
+			messages.append("{0} to {1}")
+
+		# Time
+		if any(field.fieldtype == "Time" for field in self.web_form_fields):
+			messages.append("Now")
+
 		messages.extend(col.get("label") if col else "" for col in self.list_columns)
 
-		context.translated_messages = frappe.as_json(
-			{message: _(message) for message in messages if message}
-		)
+		context.translated_messages = frappe.as_json({message: _(message) for message in messages if message})
 
 	def load_list_data(self, context):
 		if not self.list_columns:
@@ -547,7 +615,7 @@ def accept(web_form, data):
 
 
 @frappe.whitelist()
-def delete(web_form_name, docname):
+def delete(web_form_name: str, docname: str | int):
 	web_form = frappe.get_doc("Web Form", web_form_name)
 
 	owner = frappe.db.get_value(web_form.doc_type, docname, "owner")
@@ -558,7 +626,7 @@ def delete(web_form_name, docname):
 
 
 @frappe.whitelist()
-def delete_multiple(web_form_name, docnames):
+def delete_multiple(web_form_name: str, docnames: list[str | int]):
 	web_form = frappe.get_doc("Web Form", web_form_name)
 
 	docnames = json.loads(docnames)
@@ -653,51 +721,33 @@ def get_in_list_view_fields(doctype):
 	return [get_field_df(f) for f in fields]
 
 
-@frappe.whitelist(allow_guest=True)
 def get_link_options(web_form_name, doctype, allow_read_on_all_link_options=False):
-	web_form_doc = frappe.get_doc("Web Form", web_form_name)
-	doctype_validated = False
-	limited_to_user = False
-	if web_form_doc.login_required:
-		# check if frappe session user is not guest or admin
-		if frappe.session.user != "Guest":
-			doctype_validated = True
+	web_form: WebForm = frappe.get_doc("Web Form", web_form_name)
 
-			if not allow_read_on_all_link_options:
-				limited_to_user = True
-		else:
-			frappe.throw(_("You must be logged in to use this form."), frappe.PermissionError)
+	if web_form.login_required and frappe.session.user == "Guest":
+		frappe.throw(_("You must be logged in to use this form."), frappe.PermissionError)
 
-	else:
-		for field in web_form_doc.web_form_fields:
-			if field.options == doctype:
-				doctype_validated = True
-				break
-
-	if doctype_validated:
-		link_options, filters = [], {}
-
-		if limited_to_user:
-			filters = {"owner": frappe.session.user}
-
-		fields = ["name as value"]
-
-		meta = frappe.get_meta(doctype)
-
-		if meta.title_field and meta.show_title_field_in_link:
-			fields.append(f"{meta.title_field} as label")
-
-		link_options = frappe.get_all(doctype, filters, fields)
-
-		if meta.title_field and meta.show_title_field_in_link:
-			return json.dumps(link_options, default=str)
-		else:
-			return "\n".join([str(doc.value) for doc in link_options])
-
-	else:
-		raise frappe.PermissionError(
-			_("You don't have permission to access the {0} DocType.").format(doctype)
+	if not web_form.published or not any(f for f in web_form.web_form_fields if f.options == doctype):
+		frappe.throw(
+			_("You don't have permission to access the {0} DocType.").format(doctype), frappe.PermissionError
 		)
+
+	link_options, filters = [], {}
+	if web_form.login_required and not allow_read_on_all_link_options:
+		filters = {"owner": frappe.session.user}
+
+	fields = ["name as value"]
+
+	meta = frappe.get_meta(doctype)
+	if meta.title_field and meta.show_title_field_in_link:
+		fields.append(f"{meta.title_field} as label")
+
+	link_options = frappe.get_all(doctype, filters, fields)
+
+	if meta.title_field and meta.show_title_field_in_link:
+		return json.dumps(link_options, default=str)
+	else:
+		return "\n".join([str(doc.value) for doc in link_options])
 
 
 @redis_cache(ttl=60 * 60)

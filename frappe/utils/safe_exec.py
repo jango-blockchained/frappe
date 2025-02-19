@@ -7,6 +7,9 @@ import mimetypes
 import types
 from contextlib import contextmanager
 from functools import lru_cache
+from itertools import chain
+from types import FunctionType, MethodType, ModuleType
+from typing import TYPE_CHECKING, Any
 
 import RestrictedPython.Guards
 from RestrictedPython import PrintCollector, compile_restricted, safe_globals
@@ -21,11 +24,13 @@ from frappe import _
 from frappe.core.utils import html2text
 from frappe.frappeclient import FrappeClient
 from frappe.handler import execute_cmd
+from frappe.locale import get_date_format, get_number_format, get_time_format
 from frappe.model.delete_doc import delete_doc
 from frappe.model.mapper import get_mapped_doc
 from frappe.model.rename_doc import rename_doc
 from frappe.modules import scrub
 from frappe.utils.background_jobs import enqueue, get_jobs
+from frappe.utils.number_format import NumberFormat
 from frappe.website.utils import get_next_link, get_toc
 from frappe.www.printview import get_visible_columns
 
@@ -74,7 +79,7 @@ class FrappePrintCollector(PrintCollector):
 
 def is_safe_exec_enabled() -> bool:
 	# server scripts can only be enabled via common_site_config.json
-	return bool(frappe.get_common_site_config().get(SAFE_EXEC_CONFIG_KEY))
+	return bool(frappe.get_common_site_config(cached=bool(frappe.request)).get(SAFE_EXEC_CONFIG_KEY))
 
 
 def safe_exec(
@@ -86,7 +91,6 @@ def safe_exec(
 	script_filename: str | None = None,
 ):
 	if not is_safe_exec_enabled():
-
 		msg = _("Server Scripts are disabled. Please enable server scripts from bench configuration.")
 		docs_cta = _("Read the documentation to know more")
 		msg += f"<br><a href='https://frappeframework.com/docs/user/en/desk/scripting/server-script'>{docs_cta}</a>"
@@ -165,11 +169,13 @@ def get_safe_globals():
 	datautils = frappe._dict()
 
 	if frappe.db:
-		date_format = frappe.db.get_default("date_format") or "yyyy-mm-dd"
-		time_format = frappe.db.get_default("time_format") or "HH:mm:ss"
+		date_format = get_date_format()
+		time_format = get_time_format()
+		number_format = get_number_format()
 	else:
 		date_format = "yyyy-mm-dd"
 		time_format = "HH:mm:ss"
+		number_format = NumberFormat.from_string("#,###.##")
 
 	add_data_utils(datautils)
 
@@ -178,7 +184,7 @@ def get_safe_globals():
 	if "_" in form_dict:
 		del frappe.local.form_dict["_"]
 
-	user = getattr(frappe.local, "session", None) and frappe.local.session.user or "Guest"
+	user = (getattr(frappe.local, "session", None) and frappe.local.session.user) or "Guest"
 
 	out = NamespaceDict(
 		# make available limited methods of frappe
@@ -195,6 +201,7 @@ def get_safe_globals():
 			format_value=frappe.format_value,
 			date_format=date_format,
 			time_format=time_format,
+			number_format=number_format,
 			format_date=frappe.utils.data.global_date_format,
 			form_dict=form_dict,
 			bold=frappe.bold,
@@ -263,6 +270,13 @@ def get_safe_globals():
 				before_rollback=frappe.db.before_rollback,
 				add_index=frappe.db.add_index,
 			),
+			website=NamespaceDict(
+				abs_url=frappe.website.utils.abs_url,
+				extract_title=frappe.website.utils.extract_title,
+				get_boot_data=frappe.website.utils.get_boot_data,
+				get_home_page=frappe.website.utils.get_home_page,
+				get_html_content_based_on_type=frappe.website.utils.get_html_content_based_on_type,
+			),
 			lang=getattr(frappe.local, "lang", "en"),
 		),
 		FrappeClient=FrappeClient,
@@ -306,6 +320,52 @@ def get_safe_globals():
 	return out
 
 
+def get_keys_for_autocomplete(
+	key: str,
+	value: Any,
+	prefix: str = "",
+	offset: int = 0,
+	meta: str = "ctx",
+	depth: int = 0,
+	max_depth: int | None = None,
+):
+	if max_depth and depth > max_depth:
+		return
+	full_key = f"{prefix}.{key}" if prefix else key
+	if key.startswith("_"):
+		return
+	if isinstance(value, NamespaceDict | dict) and value:
+		if key == "form_dict":
+			yield {"value": full_key, "score": offset + 7, "meta": meta}
+		else:
+			yield from chain.from_iterable(
+				get_keys_for_autocomplete(
+					key,
+					value,
+					full_key,
+					offset,
+					meta,
+					depth + 1,
+					max_depth=max_depth,
+				)
+				for key, value in value.items()
+			)
+	else:
+		if isinstance(value, type) and issubclass(value, Exception):
+			score = offset + 0
+		elif isinstance(value, ModuleType):
+			score = offset + 10
+		elif isinstance(value, FunctionType | MethodType):
+			score = offset + 9
+		elif isinstance(value, type):
+			score = offset + 8
+		elif isinstance(value, dict):
+			score = offset + 7
+		else:
+			score = offset + 6
+		yield {"value": full_key, "score": score, "meta": meta}
+
+
 def is_job_queued(job_name, queue="default"):
 	"""
 	:param job_name: used to identify a queued job, usually dotted path to function
@@ -338,9 +398,7 @@ def call_whitelisted_function(function, **kwargs):
 def run_script(script, **kwargs):
 	"""run another server script"""
 
-	return call_with_form_dict(
-		lambda: frappe.get_doc("Server Script", script).execute_method(), kwargs
-	)
+	return call_with_form_dict(lambda: frappe.get_doc("Server Script", script).execute_method(), kwargs)
 
 
 def call_with_form_dict(function, kwargs):
@@ -398,7 +456,7 @@ def get_python_builtins():
 	}
 
 
-def get_hooks(hook: str = None, default=None, app_name: str = None) -> frappe._dict:
+def get_hooks(hook: str | None = None, default=None, app_name: str | None = None) -> frappe._dict:
 	"""Get hooks via `app/hooks.py`
 
 	:param hook: Name of the hook. Will gather all hooks for this name and return as a list.
@@ -501,7 +559,7 @@ def _validate_attribute_read(object, name):
 	if isinstance(name, str) and (name in UNSAFE_ATTRIBUTES):
 		raise SyntaxError(f"{name} is an unsafe attribute")
 
-	if isinstance(object, (types.ModuleType, types.CodeType, types.TracebackType, types.FrameType)):
+	if isinstance(object, types.ModuleType | types.CodeType | types.TracebackType | types.FrameType):
 		raise SyntaxError(f"Reading {object} attributes is not allowed")
 
 	if name.startswith("_"):
@@ -512,16 +570,14 @@ def _write(obj):
 	# guard function for RestrictedPython
 	if isinstance(
 		obj,
-		(
-			types.ModuleType,
-			types.CodeType,
-			types.TracebackType,
-			types.FrameType,
-			type,
-			types.FunctionType,  # covers lambda
-			types.MethodType,
-			types.BuiltinFunctionType,  # covers methods
-		),
+		types.ModuleType
+		| types.CodeType
+		| types.TracebackType
+		| types.FrameType
+		| type
+		| types.FunctionType
+		| types.MethodType
+		| types.BuiltinFunctionType,
 	):
 		raise SyntaxError(f"Not allowed to write to object {obj} of type {type(obj)}")
 	return obj
@@ -623,6 +679,9 @@ VALID_UTILS = (
 	"comma_sep",
 	"new_line_sep",
 	"filter_strip_join",
+	"add_trackers_to_url",
+	"parse_and_map_trackers_from_url",
+	"map_trackers",
 	"get_url",
 	"get_host_name_from_request",
 	"url_contains_port",
@@ -654,6 +713,7 @@ VALID_UTILS = (
 	"formatdate",
 	"get_user_info_for_avatar",
 	"get_abbr",
+	"get_month",
 )
 
 

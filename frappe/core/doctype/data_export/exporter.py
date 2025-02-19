@@ -183,9 +183,7 @@ class DataExporter:
 		self.writer.writerow([_("Notes:")])
 		self.writer.writerow([_("Please do not change the template headings.")])
 		self.writer.writerow([_("First data column must be blank.")])
-		self.writer.writerow(
-			[_('If you are uploading new records, leave the "name" (ID) column blank.')]
-		)
+		self.writer.writerow([_('If you are uploading new records, leave the "name" (ID) column blank.')])
 		self.writer.writerow(
 			[_('If you are uploading new records, "Naming Series" becomes mandatory, if present.')]
 		)
@@ -252,7 +250,9 @@ class DataExporter:
 							"label": "Parent",
 							"fieldtype": "Data",
 							"reqd": 1,
-							"info": _("Parent is the name of the document to which the data will get added to."),
+							"info": _(
+								"Parent is the name of the document to which the data will get added to."
+							),
 						}
 					),
 					True,
@@ -306,8 +306,8 @@ class DataExporter:
 
 		self.tablerow.append("")
 		self.fieldrow.append(docfield.fieldname)
-		self.labelrow.append(_(docfield.label))
-		self.mandatoryrow.append(docfield.reqd and "Yes" or "No")
+		self.labelrow.append(_(docfield.label, context=docfield.parent))
+		self.mandatoryrow.append((docfield.reqd and "Yes") or "No")
 		self.typerow.append(docfield.fieldtype)
 		self.inforow.append(self.getinforow(docfield))
 		self.columns.append(docfield.fieldname)
@@ -328,9 +328,9 @@ class DataExporter:
 			if not docfield.options:
 				return ""
 			else:
-				return _("One of") + ": %s" % ", ".join(filter(None, docfield.options.split("\n")))
+				return _("One of") + ": {}".format(", ".join(filter(None, docfield.options.split("\n"))))
 		elif docfield.fieldtype == "Link":
-			return "Valid %s" % docfield.options
+			return "Valid {}".format(docfield.options)
 		elif docfield.fieldtype == "Int":
 			return "Integer"
 		elif docfield.fieldtype == "Check":

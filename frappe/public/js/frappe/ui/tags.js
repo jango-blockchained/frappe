@@ -14,7 +14,7 @@ frappe.ui.Tags = class {
 
 	setup(parent, placeholder) {
 		this.$ul = parent;
-		this.$input = $(`<input class="tags-input form-control"></input>`);
+		this.$input = $(`<input class="tags-input form-control mt-2"></input>`);
 
 		this.$inputWrapper = this.get_list_element(this.$input);
 		this.$placeholder =
@@ -94,23 +94,28 @@ frappe.ui.Tags = class {
 	}
 
 	get_list_element($element, class_name = "") {
-		let $li = $(`<li class="${class_name}"></li>`);
+		let $li = $(`<div class="${class_name}"></div>`);
 		$element.appendTo($li);
 		return $li;
 	}
 
 	get_tag(label) {
-		let $tag = frappe.get_data_pill(label, label, (target, pill_wrapper) => {
-			this.removeTag(target);
-			pill_wrapper.closest(".form-tag-row").remove();
-		});
-
+		let colored = true;
+		let $tag = frappe.get_data_pill(
+			label,
+			label,
+			(target, pill_wrapper) => {
+				this.removeTag(target);
+				pill_wrapper.closest(".form-tag-row").remove();
+			},
+			null,
+			colored
+		);
 		if (this.onTagClick) {
 			$tag.on("click", ".pill-label", () => {
 				this.onTagClick(label);
 			});
 		}
-
 		return $tag;
 	}
 };

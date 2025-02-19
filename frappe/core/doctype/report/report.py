@@ -2,6 +2,7 @@
 # License: MIT. See LICENSE
 import datetime
 import json
+import threading
 
 import frappe
 import frappe.desk.query_report
@@ -45,6 +46,7 @@ class Report(Document):
 		report_script: DF.Code | None
 		report_type: DF.Literal["Report Builder", "Query Report", "Script Report", "Custom Report"]
 		roles: DF.Table[HasRole]
+		timeout: DF.Int
 	# end: auto-generated types
 
 	def validate(self):
@@ -55,7 +57,8 @@ class Report(Document):
 		if not self.is_standard:
 			self.is_standard = "No"
 			if (
-				frappe.session.user == "Administrator" and getattr(frappe.local.conf, "developer_mode", 0) == 1
+				frappe.session.user == "Administrator"
+				and getattr(frappe.local.conf, "developer_mode", 0) == 1
 			):
 				self.is_standard = "Yes"
 
@@ -93,6 +96,9 @@ class Report(Document):
 			frappe.throw(_("You are not allowed to delete Standard Report"))
 		delete_custom_role("report", self.name)
 
+	def get_permission_log_options(self, event=None):
+		return {"fields": ["roles"]}
+
 	def get_columns(self):
 		return [d.as_dict(no_default_fields=True, no_child_table_fields=True) for d in self.columns]
 
@@ -108,9 +114,7 @@ class Report(Document):
 		"""Return True if `Has Role` is not set or the user is allowed."""
 		from frappe.utils import has_common
 
-		allowed = [
-			d.role for d in frappe.get_all("Has Role", fields=["role"], filters={"parent": self.name})
-		]
+		allowed = [d.role for d in frappe.get_all("Has Role", fields=["role"], filters={"parent": self.name})]
 
 		custom_roles = get_custom_allowed_roles("report", self.name)
 
@@ -132,9 +136,7 @@ class Report(Document):
 			return
 
 		if self.is_standard == "Yes" and frappe.conf.developer_mode:
-			export_to_files(
-				record_list=[["Report", self.name]], record_module=self.module, create_init=True
-			)
+			export_to_files(record_list=[["Report", self.name]], record_module=self.module, create_init=True)
 
 			self.create_report_py()
 
@@ -159,6 +161,14 @@ class Report(Document):
 		threshold = 15
 
 		start_time = datetime.datetime.now()
+		prepared_report_watcher = None
+		if not self.prepared_report:
+			prepared_report_watcher = threading.Timer(
+				interval=threshold,
+				function=enable_prepared_report,
+				kwargs={"report": self.name, "site": frappe.local.site},
+			)
+			prepared_report_watcher.start()
 
 		# The JOB
 		if self.is_standard == "Yes":
@@ -166,10 +176,8 @@ class Report(Document):
 		else:
 			res = self.execute_script(filters)
 
-		# automatically set as prepared
+		prepared_report_watcher and prepared_report_watcher.cancel()
 		execution_time = (datetime.datetime.now() - start_time).total_seconds()
-		if execution_time > threshold and not self.prepared_report:
-			frappe.enqueue(enable_prepared_report, report=self.name)
 
 		frappe.cache.hset("report_execution_time", self.name, execution_time)
 
@@ -304,7 +312,7 @@ class Report(Document):
 		if filters:
 			for key, value in filters.items():
 				condition, _value = "=", value
-				if isinstance(value, (list, tuple)):
+				if isinstance(value, list | tuple):
 					condition, _value = value
 				_filters.append([key, condition, _value])
 
@@ -318,7 +326,7 @@ class Report(Document):
 		elif params.get("order_by"):
 			order_by = params.get("order_by")
 		else:
-			order_by = Report._format([self.ref_doctype, "modified"]) + " desc"
+			order_by = Report._format([self.ref_doctype, "creation"]) + " desc"
 
 		if params.get("sort_by_next"):
 			order_by += (
@@ -339,7 +347,7 @@ class Report(Document):
 	def build_standard_report_columns(self, columns, group_by_args):
 		_columns = []
 
-		for (fieldname, doctype) in columns:
+		for fieldname, doctype in columns:
 			meta = frappe.get_meta(doctype)
 
 			if meta.get_field(fieldname):
@@ -363,7 +371,7 @@ class Report(Document):
 	def build_data_dict(self, result, columns):
 		data = []
 		for row in result:
-			if isinstance(row, (list, tuple)):
+			if isinstance(row, list | tuple):
 				_row = frappe._dict()
 				for i, val in enumerate(row):
 					_row[columns[i].get("fieldname")] = val
@@ -417,5 +425,9 @@ def get_group_by_column_label(args, meta):
 	return label
 
 
-def enable_prepared_report(report: str):
+def enable_prepared_report(report: str, site: str):
+	frappe.init(site)
+	frappe.connect()
 	frappe.db.set_value("Report", report, "prepared_report", 1)
+	frappe.db.commit()
+	frappe.destroy()

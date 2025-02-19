@@ -15,7 +15,7 @@ from frappe.email.doctype.newsletter.newsletter import (
 	send_scheduled_email,
 )
 from frappe.email.queue import flush
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate
 
 emails = [
@@ -134,7 +134,7 @@ class TestNewsletterMixin:
 		return newsletter
 
 
-class TestNewsletter(TestNewsletterMixin, FrappeTestCase):
+class TestNewsletter(TestNewsletterMixin, IntegrationTestCase):
 	def test_send(self):
 		self.send_newsletter()
 
@@ -147,9 +147,7 @@ class TestNewsletter(TestNewsletterMixin, FrappeTestCase):
 	def test_unsubscribe(self):
 		name = self.send_newsletter()
 		to_unsubscribe = choice(emails)
-		group = frappe.get_all(
-			"Newsletter Email Group", filters={"parent": name}, fields=["email_group"]
-		)
+		group = frappe.get_all("Newsletter Email Group", filters={"parent": name}, fields=["email_group"])
 
 		flush()
 		confirmed_unsubscribe(to_unsubscribe, group[0].email_group)

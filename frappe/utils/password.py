@@ -12,7 +12,6 @@ from frappe.utils import cstr, encode
 
 Auth = Table("__Auth")
 
-
 passlibctx = CryptContext(
 	schemes=[
 		"pbkdf2_sha256",
@@ -35,7 +34,13 @@ def get_decrypted_password(doctype, name, fieldname="password", raise_exception=
 	).run()
 
 	if result and result[0][0]:
-		return decrypt(result[0][0])
+		try:
+			return decrypt(result[0][0], key=f"{doctype}.{name}.{fieldname}")
+		except frappe.ValidationError as e:
+			if raise_exception:
+				raise e
+
+			return None
 
 	elif raise_exception:
 		frappe.throw(
@@ -104,9 +109,7 @@ def check_password(user, pwd, doctype="User", fieldname="password", delete_track
 
 
 def delete_login_failed_cache(user):
-	frappe.cache.hdel("last_login_tried", user)
 	frappe.cache.hdel("login_failed_count", user)
-	frappe.cache.hdel("locked_account_time", user)
 
 
 def update_password(user, pwd, doctype="User", fieldname="password", logout_all_sessions=False):
@@ -186,7 +189,7 @@ def encrypt(txt, encryption_key=None):
 	return cstr(cipher_suite.encrypt(encode(txt)))
 
 
-def decrypt(txt, encryption_key=None):
+def decrypt(txt, encryption_key=None, key: str | None = None):
 	# Only use encryption_key value generated with Fernet.generate_key().decode()
 
 	try:
@@ -195,11 +198,16 @@ def decrypt(txt, encryption_key=None):
 	except InvalidToken:
 		# encryption_key in site_config is changed and not valid
 		frappe.throw(
-			_("Encryption key is invalid! Please check site_config.json")
-			+ "<br>"
+			(_("Failed to decrypt key {0}").format(key) + "<br><br>" if key else "")
+			+ _("Encryption key is invalid! Please check site_config.json")
+			+ "<br><br>"
 			+ _(
-				"If you have recently restored the site you may need to copy the site config contaning original Encryption Key."
+				"If you have recently restored the site, you may need to copy the site_config.json containing the original encryption key."
 			)
+			+ "<br><br>"
+			+ _(
+				"Please visit https://frappecloud.com/docs/sites/migrate-an-existing-site#encryption-key for more information."
+			),
 		)
 
 
@@ -215,4 +223,4 @@ def get_encryption_key():
 
 
 def get_password_reset_limit():
-	return frappe.db.get_single_value("System Settings", "password_reset_limit") or 0
+	return frappe.get_system_settings("password_reset_limit") or 3

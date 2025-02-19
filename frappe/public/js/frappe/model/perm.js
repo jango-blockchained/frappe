@@ -53,7 +53,7 @@ $.extend(frappe.perm, {
 	_get_perm: (doctype, doc) => {
 		let perm = [{ read: 0, permlevel: 0 }];
 
-		let meta = frappe.get_doc("DocType", doctype);
+		let meta = frappe.get_meta(doctype);
 		const user = frappe.session.user;
 
 		if (user === "Administrator" || frappe.user_roles.includes("Administrator")) {
@@ -193,7 +193,7 @@ $.extend(frappe.perm, {
 
 		if (!perm) {
 			let is_hidden = df && (cint(df.hidden) || cint(df.hidden_due_to_dependency));
-			let is_read_only = df && cint(df.read_only);
+			let is_read_only = df && (cint(df.read_only) || cint(df.is_virtual));
 			return is_hidden ? "None" : is_read_only ? "Read" : "Write";
 		}
 
@@ -203,7 +203,7 @@ $.extend(frappe.perm, {
 
 		// permission
 		if (p) {
-			if (p.write && !df.disabled) {
+			if (p.write && !df.disabled && !df.is_virtual) {
 				status = "Write";
 			} else if (p.read) {
 				status = "Read";

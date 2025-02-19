@@ -30,9 +30,7 @@ class WebsiteGenerator(Document):
 			self.name = self.scrubbed_title()
 
 	def onload(self):
-		self.get("__onload").update(
-			{"is_website_generator": True, "published": self.is_website_published()}
-		)
+		self.get("__onload").update({"is_website_generator": True, "published": self.is_website_published()})
 
 	def validate(self):
 		self.set_route()
@@ -71,6 +69,9 @@ class WebsiteGenerator(Document):
 	def clear_cache(self):
 		super().clear_cache()
 		clear_cache(self.route)
+
+		frappe.db.after_commit.add(lambda: clear_cache(self.route))
+		frappe.db.after_rollback.add(lambda: clear_cache(self.route))
 
 	def scrub(self, text):
 		return cleanup_page_name(text).replace("_", "-")

@@ -37,14 +37,61 @@ frappe.Application = class Application {
 		this.load_bootinfo();
 		this.load_user_permissions();
 		this.make_nav_bar();
+		this.make_sidebar();
 		this.set_favicon();
 		this.set_fullwidth_if_enabled();
 		this.add_browser_class();
 		this.setup_energy_point_listeners();
 		this.setup_copy_doc_listener();
+		this.setup_broadcast_listeners();
 
 		frappe.ui.keys.setup();
 
+		this.setup_theme();
+
+		// page container
+		this.make_page_container();
+		this.setup_tours();
+		this.set_route();
+
+		// trigger app startup
+		$(document).trigger("startup");
+		$(document).trigger("app_ready");
+
+		this.show_notices();
+		this.show_notes();
+
+		if (frappe.ui.startup_setup_dialog && !frappe.boot.setup_complete) {
+			frappe.ui.startup_setup_dialog.pre_show();
+			frappe.ui.startup_setup_dialog.show();
+		}
+
+		// listen to build errors
+		this.setup_build_events();
+
+		if (frappe.sys_defaults.email_user_password) {
+			var email_list = frappe.sys_defaults.email_user_password.split(",");
+			for (var u in email_list) {
+				if (email_list[u] === frappe.user.name) {
+					this.set_password(email_list[u]);
+				}
+			}
+		}
+
+		// REDESIGN-TODO: Fix preview popovers
+		this.link_preview = new frappe.ui.LinkPreview();
+
+		frappe.broadcast.emit("boot", {
+			csrf_token: frappe.csrf_token,
+			user: frappe.session.user,
+		});
+	}
+
+	make_sidebar() {
+		this.sidebar = new frappe.ui.Sidebar({});
+	}
+
+	setup_theme() {
 		frappe.ui.keys.add_shortcut({
 			shortcut: "shift+ctrl+g",
 			description: __("Switch Theme"),
@@ -70,9 +117,9 @@ frappe.Application = class Application {
 		});
 
 		frappe.ui.set_theme();
+	}
 
-		// page container
-		this.make_page_container();
+	setup_tours() {
 		if (
 			!window.Cypress &&
 			frappe.boot.onboarding_tours &&
@@ -89,13 +136,9 @@ frappe.Application = class Application {
 				});
 			}
 		}
-		this.set_route();
+	}
 
-		// trigger app startup
-		$(document).trigger("startup");
-
-		$(document).trigger("app_ready");
-
+	show_notices() {
 		if (frappe.boot.messages) {
 			frappe.msgprint(frappe.boot.messages);
 		}
@@ -115,13 +158,6 @@ frappe.Application = class Application {
 			console.log(`%c${console_security_message}`, "font-size: large");
 		}
 
-		this.show_notes();
-
-		if (frappe.ui.startup_setup_dialog && !frappe.boot.setup_complete) {
-			frappe.ui.startup_setup_dialog.pre_show();
-			frappe.ui.startup_setup_dialog.show();
-		}
-
 		frappe.realtime.on("version-update", function () {
 			var dialog = frappe.msgprint({
 				message: __(
@@ -135,21 +171,6 @@ frappe.Application = class Application {
 			});
 			dialog.get_close_btn().toggle(false);
 		});
-
-		// listen to build errors
-		this.setup_build_events();
-
-		if (frappe.sys_defaults.email_user_password) {
-			var email_list = frappe.sys_defaults.email_user_password.split(",");
-			for (var u in email_list) {
-				if (email_list[u] === frappe.user.name) {
-					this.set_password(email_list[u]);
-				}
-			}
-		}
-
-		// REDESIGN-TODO: Fix preview popovers
-		this.link_preview = new frappe.ui.LinkPreview();
 	}
 
 	set_route() {
@@ -269,6 +290,8 @@ frappe.Application = class Application {
 	setup_workspaces() {
 		frappe.modules = {};
 		frappe.workspaces = {};
+		frappe.boot.allowed_workspaces = frappe.boot.sidebar_pages.pages;
+
 		for (let page of frappe.boot.allowed_workspaces || []) {
 			frappe.modules[page.module] = page;
 			frappe.workspaces[frappe.router.slug(page.name)] = page;
@@ -380,7 +403,7 @@ frappe.Application = class Application {
 		$(document.activeElement).blur();
 		// wait for possible JS validations triggered after blur (it might change primary button)
 		setTimeout(() => {
-			if (window.cur_dialog && cur_dialog.display) {
+			if (window.cur_dialog && cur_dialog.display && !cur_dialog.is_minimized) {
 				// trigger primary
 				cur_dialog.get_primary_btn().trigger("click");
 			} else if (cur_frm && cur_frm.page.btn_primary.is(":visible")) {
@@ -430,11 +453,8 @@ frappe.Application = class Application {
 	}
 
 	show_update_available() {
-		if (frappe.boot.sysdefaults.disable_system_update_notification) return;
-
-		frappe.call({
-			method: "frappe.utils.change_log.show_update_popup",
-		});
+		if (!frappe.boot.has_app_updates) return;
+		frappe.xcall("frappe.utils.change_log.show_update_popup");
 	}
 
 	add_browser_class() {
@@ -507,11 +527,38 @@ frappe.Application = class Application {
 							frappe.set_route("Form", newdoc.doctype, newdoc.name);
 							frappe.dom.unfreeze();
 						});
-						res && res.fail(frappe.dom.unfreeze);
+						res && res.fail?.(frappe.dom.unfreeze);
 					});
 				}
 			} catch (e) {
 				//
+			}
+		});
+	}
+
+	/// Setup event listeners for events across browser tabs / web workers.
+	setup_broadcast_listeners() {
+		// booted in another tab -> refresh csrf to avoid invalid requests.
+		frappe.broadcast.on("boot", ({ csrf_token, user }) => {
+			if (user && user != frappe.session.user) {
+				frappe.msgprint({
+					message: __(
+						"You've logged in as another user from another tab. Refresh this page to continue using system."
+					),
+					title: __("User Changed"),
+					primary_action: {
+						label: __("Refresh"),
+						action: () => {
+							window.location.reload();
+						},
+					},
+				});
+				return;
+			}
+
+			if (csrf_token) {
+				// If user re-logged in then their other tabs won't be usable without this update.
+				frappe.csrf_token = csrf_token;
 			}
 		});
 	}

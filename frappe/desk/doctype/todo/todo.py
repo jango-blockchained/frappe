@@ -34,12 +34,12 @@ class ToDo(Document):
 		sender: DF.Data | None
 		status: DF.Literal["Open", "Closed", "Cancelled"]
 	# end: auto-generated types
+
 	DocType = "ToDo"
 
 	def validate(self):
 		self._assignment = None
 		if self.is_new():
-
 			if self.assigned_by == self.allocated_to:
 				assignment_message = frappe._("{0} self assigned this task: {1}").format(
 					get_fullname(self.assigned_by), self.description
@@ -83,24 +83,24 @@ class ToDo(Document):
 
 	def delete_communication_links(self):
 		# unlink todo from linked comments
-		return frappe.db.delete(
-			"Communication Link", {"link_doctype": self.doctype, "link_name": self.name}
-		)
+		return frappe.db.delete("Communication Link", {"link_doctype": self.doctype, "link_name": self.name})
 
 	def update_in_reference(self):
 		if not (self.reference_type and self.reference_name):
 			return
 
 		try:
-			assignments = frappe.get_all(
+			assignments = frappe.db.get_values(
 				"ToDo",
-				filters={
+				{
 					"reference_type": self.reference_type,
 					"reference_name": self.reference_name,
 					"status": ("not in", ("Cancelled", "Closed")),
 					"allocated_to": ("is", "set"),
 				},
-				pluck="allocated_to",
+				"allocated_to",
+				pluck=True,
+				for_update=True,
 			)
 			assignments.reverse()
 
@@ -108,7 +108,7 @@ class ToDo(Document):
 				frappe.db.set_single_value(
 					self.reference_type,
 					"_assign",
-					json.dumps(assignments),
+					json.dumps(assignments) if assignments else "",
 					update_modified=False,
 				)
 			else:
@@ -116,7 +116,7 @@ class ToDo(Document):
 					self.reference_type,
 					self.reference_name,
 					"_assign",
-					json.dumps(assignments),
+					json.dumps(assignments) if assignments else "",
 					update_modified=False,
 				)
 
@@ -125,7 +125,7 @@ class ToDo(Document):
 				# no table
 				return
 
-			elif frappe.db.is_column_missing(e):
+			elif frappe.db.is_missing_column(e):
 				from frappe.database.schema import add_column
 
 				add_column(self.reference_type, "_assign", "Text")

@@ -2,7 +2,6 @@
 *.py~
 *.comp.js
 *.DS_Store
-locale
 .wnf-lang-status
 *.swp
 *.egg-info
@@ -195,3 +194,7 @@ cypress/videos
 
 # JetBrains IDEs
 .idea/
+# Helix Editor
+.helix/
+# Aider AI Chat
+.aider*

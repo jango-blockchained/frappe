@@ -9,11 +9,15 @@ import "./frappe/dom.js";
 import "./frappe/ui/messages.js";
 import "./frappe/ui/keyboard.js";
 import "./frappe/ui/colors.js";
+import "./frappe/ui/sidebar.html";
 import "./frappe/ui/sidebar.js";
+import "./frappe/ui/apps_switcher.js";
+import "./frappe/ui/apps_switcher.html";
 import "./frappe/ui/link_preview.js";
 
 import "./frappe/request.js";
 import "./frappe/socketio_client.js";
+import "./frappe/broadcast.js";
 import "./frappe/utils/utils.js";
 import "./frappe/event_emitter.js";
 import "./frappe/router.js";
@@ -26,7 +30,6 @@ import "./frappe/microtemplate.js";
 import "./frappe/ui/page.html";
 import "./frappe/ui/page.js";
 import "./frappe/ui/slides.js";
-// import "./frappe/ui/onboarding_dialog.js";
 import "./frappe/ui/find.js";
 import "./frappe/ui/iconbar.js";
 import "./frappe/form/layout.js";
@@ -74,7 +77,6 @@ import "./frappe/views/factory.js";
 import "./frappe/views/pageview.js";
 
 import "./frappe/ui/toolbar/awesome_bar.js";
-// import "./frappe/ui/toolbar/energy_points_notifications.js";
 import "./frappe/ui/notifications/notifications.js";
 import "./frappe/ui/toolbar/search.js";
 import "./frappe/ui/toolbar/tag_utils.js";
@@ -83,7 +85,6 @@ import "./frappe/ui/toolbar/search_utils.js";
 import "./frappe/ui/toolbar/about.js";
 import "./frappe/ui/toolbar/navbar.html";
 import "./frappe/ui/toolbar/toolbar.js";
-// import "./frappe/ui/toolbar/notifications.js";
 import "./frappe/views/communication.js";
 import "./frappe/views/translation_manager.js";
 import "./frappe/views/workspace/workspace.js";
@@ -100,11 +101,11 @@ import "./frappe/ui/workspace_sidebar_loading_skeleton.html";
 import "./frappe/desk.js";
 import "./frappe/query_string.js";
 
-// import "./frappe/ui/comment.js";
-
 import "./frappe/utils/energy_point_utils.js";
 import "./frappe/utils/dashboard_utils.js";
 import "./frappe/ui/chart.js";
 import "./frappe/ui/datatable.js";
 import "./frappe/ui/driver.js";
 import "./frappe/scanner";
+
+import "./frappe/ui/address_autocomplete/autocomplete_dialog.js";

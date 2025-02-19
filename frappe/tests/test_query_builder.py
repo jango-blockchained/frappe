@@ -3,6 +3,7 @@ from collections.abc import Callable
 from datetime import time
 
 import frappe
+from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.query_builder import Case
 from frappe.query_builder.builder import Function
 from frappe.query_builder.custom import ConstantColumn
@@ -18,7 +19,7 @@ from frappe.query_builder.functions import (
 	UnixTimestamp,
 )
 from frappe.query_builder.utils import db_type_is
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 
 def run_only_if(dbtype: db_type_is) -> Callable:
@@ -26,7 +27,7 @@ def run_only_if(dbtype: db_type_is) -> Callable:
 
 
 @run_only_if(db_type_is.MARIADB)
-class TestCustomFunctionsMariaDB(FrappeTestCase):
+class TestCustomFunctionsMariaDB(IntegrationTestCase):
 	def test_concat(self):
 		self.assertEqual("GROUP_CONCAT('Notes')", GroupConcat("Notes").get_sql())
 
@@ -69,8 +70,7 @@ class TestCustomFunctionsMariaDB(FrappeTestCase):
 		)
 
 		select_query = select_query.where(
-			CombineDatetime(note.posting_date, note.posting_time)
-			>= CombineDatetime("2021-01-01", "00:00:01")
+			CombineDatetime(note.posting_date, note.posting_time) >= CombineDatetime("2021-01-01", "00:00:01")
 		)
 		self.assertIn(
 			"timestamp(`tabnote`.`posting_date`,`tabnote`.`posting_time`)>=timestamp('2021-01-01','00:00:01')",
@@ -111,9 +111,7 @@ class TestCustomFunctionsMariaDB(FrappeTestCase):
 		)
 
 		# Function comparison
-		select_query = select_query.where(
-			UnixTimestamp(note.posting_date) >= UnixTimestamp("2021-01-01")
-		)
+		select_query = select_query.where(UnixTimestamp(note.posting_date) >= UnixTimestamp("2021-01-01"))
 		self.assertIn(
 			"unix_timestamp(`tabnote`.`posting_date`)>=unix_timestamp('2021-01-01')",
 			str(select_query).lower(),
@@ -132,9 +130,7 @@ class TestCustomFunctionsMariaDB(FrappeTestCase):
 			"TIMESTAMP('2021-01-01','00:00:21')", CombineDatetime("2021-01-01", time(0, 0, 21)).get_sql()
 		)
 
-		select_query = frappe.qb.from_(note).select(
-			CombineDatetime(note.posting_date, note.posting_time)
-		)
+		select_query = frappe.qb.from_(note).select(CombineDatetime(note.posting_date, note.posting_time))
 		self.assertIn("select timestamp(`posting_date`,`posting_time`)", str(select_query).lower())
 
 		select_query = select_query.where(
@@ -171,7 +167,7 @@ class TestCustomFunctionsMariaDB(FrappeTestCase):
 
 
 @run_only_if(db_type_is.POSTGRES)
-class TestCustomFunctionsPostgres(FrappeTestCase):
+class TestCustomFunctionsPostgres(IntegrationTestCase):
 	def test_concat(self):
 		self.assertEqual("STRING_AGG('Notes',',')", GroupConcat("Notes").get_sql())
 
@@ -202,18 +198,13 @@ class TestCustomFunctionsPostgres(FrappeTestCase):
 			.on(todo.refernce_name == note.name)
 			.select(CombineDatetime(note.posting_date, note.posting_time))
 		)
-		self.assertIn(
-			'select "tabnote"."posting_date"+"tabnote"."posting_time"', str(select_query).lower()
-		)
+		self.assertIn('select "tabnote"."posting_date"+"tabnote"."posting_time"', str(select_query).lower())
 
 		select_query = select_query.orderby(CombineDatetime(note.posting_date, note.posting_time))
-		self.assertIn(
-			'order by "tabnote"."posting_date"+"tabnote"."posting_time"', str(select_query).lower()
-		)
+		self.assertIn('order by "tabnote"."posting_date"+"tabnote"."posting_time"', str(select_query).lower())
 
 		select_query = select_query.where(
-			CombineDatetime(note.posting_date, note.posting_time)
-			>= CombineDatetime("2021-01-01", "00:00:01")
+			CombineDatetime(note.posting_date, note.posting_time) >= CombineDatetime("2021-01-01", "00:00:01")
 		)
 		self.assertIn(
 			"""where "tabnote"."posting_date"+"tabnote"."posting_time">=cast('2021-01-01' as date)+cast('00:00:01' as time)""",
@@ -276,9 +267,7 @@ class TestCustomFunctionsPostgres(FrappeTestCase):
 			CombineDatetime("2021-01-01", time(0, 0, 21)).get_sql(),
 		)
 
-		select_query = frappe.qb.from_(note).select(
-			CombineDatetime(note.posting_date, note.posting_time)
-		)
+		select_query = frappe.qb.from_(note).select(CombineDatetime(note.posting_date, note.posting_time))
 		self.assertIn('select "posting_date"+"posting_time"', str(select_query).lower())
 
 		select_query = select_query.where(
@@ -328,26 +317,36 @@ class TestBuilderBase:
 		self.assertIsInstance(data, list)
 
 	def test_agg_funcs(self):
-		frappe.db.truncate("Communication")
+		doc = new_doctype(
+			fields=[
+				{
+					"fieldname": "number",
+					"fieldtype": "Int",
+					"label": "Number",
+					"reqd": 1,  # mandatory
+				},
+			],
+		)
+		doc.insert()
+		self.doctype_name = doc.name
+		frappe.db.truncate(self.doctype_name)
 		sample_data = {
-			"doctype": "Communication",
-			"communication_type": "Communication",
-			"content": "testing",
-			"rating": 1,
+			"doctype": self.doctype_name,
+			"number": 1,
 		}
-		frappe.get_doc(sample_data).insert()
-		sample_data["rating"] = 3
-		frappe.get_doc(sample_data).insert()
-		sample_data["rating"] = 4
-		frappe.get_doc(sample_data).insert()
-		self.assertEqual(frappe.qb.max("Communication", "rating"), 4)
-		self.assertEqual(frappe.qb.min("Communication", "rating"), 1)
-		self.assertAlmostEqual(frappe.qb.avg("Communication", "rating"), 2.666, places=2)
-		self.assertEqual(frappe.qb.sum("Communication", "rating"), 8.0)
+		frappe.get_doc(sample_data).insert(ignore_mandatory=True)
+		sample_data["number"] = 3
+		frappe.get_doc(sample_data).insert(ignore_mandatory=True)
+		sample_data["number"] = 4
+		frappe.get_doc(sample_data).insert(ignore_mandatory=True)
+		self.assertEqual(frappe.qb.max(self.doctype_name, "number"), 4)
+		self.assertEqual(frappe.qb.min(self.doctype_name, "number"), 1)
+		self.assertAlmostEqual(frappe.qb.avg(self.doctype_name, "number"), 2.666, places=2)
+		self.assertEqual(frappe.qb.sum(self.doctype_name, "number"), 8.0)
 		frappe.db.rollback()
 
 
-class TestParameterization(FrappeTestCase):
+class TestParameterization(IntegrationTestCase):
 	def test_where_conditions(self):
 		DocType = frappe.qb.DocType("DocType")
 		query = frappe.qb.from_(DocType).select(DocType.name).where(DocType.owner == "Administrator' --")
@@ -372,9 +371,7 @@ class TestParameterization(FrappeTestCase):
 	def test_where_conditions_functions(self):
 		DocType = frappe.qb.DocType("DocType")
 		query = (
-			frappe.qb.from_(DocType)
-			.select(DocType.name)
-			.where(Coalesce(DocType.search_fields == "subject"))
+			frappe.qb.from_(DocType).select(DocType.name).where(Coalesce(DocType.search_fields == "subject"))
 		)
 
 		self.assertTrue("walk" in dir(query))
@@ -440,7 +437,7 @@ class TestParameterization(FrappeTestCase):
 
 
 @run_only_if(db_type_is.MARIADB)
-class TestBuilderMaria(FrappeTestCase, TestBuilderBase):
+class TestBuilderMaria(IntegrationTestCase, TestBuilderBase):
 	def test_adding_tabs_in_from(self):
 		self.assertEqual("SELECT * FROM `tabNotes`", frappe.qb.from_("Notes").select("*").get_sql())
 		self.assertEqual("SELECT * FROM `__Auth`", frappe.qb.from_("__Auth").select("*").get_sql())
@@ -453,7 +450,7 @@ class TestBuilderMaria(FrappeTestCase, TestBuilderBase):
 
 
 @run_only_if(db_type_is.POSTGRES)
-class TestBuilderPostgres(FrappeTestCase, TestBuilderBase):
+class TestBuilderPostgres(IntegrationTestCase, TestBuilderBase):
 	def test_adding_tabs_in_from(self):
 		self.assertEqual('SELECT * FROM "tabNotes"', frappe.qb.from_("Notes").select("*").get_sql())
 		self.assertEqual('SELECT * FROM "__Auth"', frappe.qb.from_("__Auth").select("*").get_sql())
@@ -475,7 +472,7 @@ class TestBuilderPostgres(FrappeTestCase, TestBuilderBase):
 		self.assertEqual('SELECT * FROM "tabDocType"', qb().from_("DocType").select("*").get_sql())
 
 
-class TestMisc(FrappeTestCase):
+class TestMisc(IntegrationTestCase):
 	def test_custom_func(self):
 		rand_func = frappe.qb.functions("rand", "45")
 		self.assertIsInstance(rand_func, Function)
@@ -493,3 +490,11 @@ class TestMisc(FrappeTestCase):
 
 		DocType = Table("DocType")
 		self.assertEqual(DocType.get_sql(), "DocType")
+
+	def test_union(self):
+		user = frappe.qb.DocType("User")
+		role = frappe.qb.DocType("Role")
+		users = frappe.qb.from_(user).select(user.name)
+		roles = frappe.qb.from_(role).select(role.name)
+
+		self.assertEqual(set(users.run() + roles.run()), set((users + roles).run()))

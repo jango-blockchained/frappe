@@ -4,13 +4,13 @@
 import frappe
 from frappe import _
 from frappe.boot import get_allowed_report_names
-from frappe.config import get_modules_from_all_apps_for_user
 from frappe.model.document import Document
 from frappe.model.naming import append_number_if_name_exists
 from frappe.modules.export_file import export_to_files
 from frappe.query_builder import Criterion
 from frappe.query_builder.utils import DocType
 from frappe.utils import cint, flt
+from frappe.utils.modules import get_modules_from_all_apps_for_user
 
 
 class NumberCard(Document):
@@ -22,8 +22,9 @@ class NumberCard(Document):
 	if TYPE_CHECKING:
 		from frappe.types import DF
 
-		aggregate_function_based_on: DF.Literal
+		aggregate_function_based_on: DF.Literal[None]
 		color: DF.Color | None
+		currency: DF.Link | None
 		document_type: DF.Link | None
 		dynamic_filters_json: DF.Code | None
 		filters_config: DF.Code | None
@@ -35,13 +36,14 @@ class NumberCard(Document):
 		method: DF.Data | None
 		module: DF.Link | None
 		parent_document_type: DF.Link | None
-		report_field: DF.Literal
+		report_field: DF.Literal[None]
 		report_function: DF.Literal["Sum", "Average", "Minimum", "Maximum"]
 		report_name: DF.Link | None
 		show_percentage_stats: DF.Check
 		stats_time_interval: DF.Literal["Daily", "Weekly", "Monthly", "Yearly"]
 		type: DF.Literal["Document Type", "Report", "Custom"]
 	# end: auto-generated types
+
 	def autoname(self):
 		if not self.name:
 			self.name = self.label
@@ -87,9 +89,7 @@ def get_permission_query_conditions(user=None):
 	doctype_condition = False
 	module_condition = False
 
-	allowed_doctypes = [
-		frappe.db.escape(doctype) for doctype in frappe.permissions.get_doctypes_with_read()
-	]
+	allowed_doctypes = [frappe.db.escape(doctype) for doctype in frappe.permissions.get_doctypes_with_read()]
 	allowed_modules = [
 		frappe.db.escape(module.get("module_name")) for module in get_modules_from_all_apps_for_user()
 	]
@@ -100,17 +100,13 @@ def get_permission_query_conditions(user=None):
 		)
 	if allowed_modules:
 		module_condition = """`tabNumber Card`.`module` in ({allowed_modules})
-			or `tabNumber Card`.`module` is NULL""".format(
-			allowed_modules=",".join(allowed_modules)
-		)
+			or `tabNumber Card`.`module` is NULL""".format(allowed_modules=",".join(allowed_modules))
 
-	return """
+	return f"""
 		{doctype_condition}
 		and
 		{module_condition}
-	""".format(
-		doctype_condition=doctype_condition, module_condition=module_condition
-	)
+	"""
 
 
 def has_permission(doc, ptype, user):
@@ -146,11 +142,7 @@ def get_result(doc, filters, to_date=None):
 	if function == "count":
 		fields = [f"{function}(*) as result"]
 	else:
-		fields = [
-			"{function}({based_on}) as result".format(
-				function=function, based_on=doc.aggregate_function_based_on
-			)
-		]
+		fields = [f"{function}({doc.aggregate_function_based_on}) as result"]
 
 	if not filters:
 		filters = []

@@ -16,7 +16,7 @@ class DbManager:
 	def create_user(self, user, password, host=None):
 		host = host or self.get_current_host()
 		password_predicate = f" IDENTIFIED BY '{password}'" if password else ""
-		self.db.sql(f"CREATE USER '{user}'@'{host}'{password_predicate}")
+		self.db.sql(f"CREATE USER IF NOT EXISTS '{user}'@'{host}'{password_predicate}")
 
 	def delete_user(self, target, host=None):
 		host = host or self.get_current_host()
@@ -25,7 +25,7 @@ class DbManager:
 	def create_database(self, target):
 		if target in self.get_database_list():
 			self.drop_database(target)
-		self.db.sql(f"CREATE DATABASE `{target}`")
+		self.db.sql(f"CREATE DATABASE `{target}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 
 	def drop_database(self, target):
 		self.db.sql_ddl(f"DROP DATABASE IF EXISTS `{target}`")
@@ -50,26 +50,43 @@ class DbManager:
 		return self.db.sql("SHOW DATABASES", pluck=True)
 
 	@staticmethod
-	def restore_database(verbose, target, source, user, password):
+	def restore_database(verbose: bool, target: str, source: str, user: str, password: str) -> None:
+		"""
+		Function to restore the given SQL file to the target database.
+		:param target: The database to restore to.
+		:param source: The SQL dump to restore
+		:param user: The database username
+		:param password: The database password
+		:return: Nothing
+		"""
+
 		import shlex
 		from shutil import which
 
 		from frappe.database import get_command
 		from frappe.utils import execute_in_shell
 
-		command = ["set -o pipefail;"]
+		# Ensure that the entire process fails if any part of the pipeline fails
+		command: list[str] = ["set -o pipefail;"]
 
+		# Handle gzipped backups
 		if source.endswith(".gz"):
 			if gzip := which("gzip"):
 				command.extend([gzip, "-cd", source, "|"])
-				source = []
 			else:
 				raise Exception("`gzip` not installed")
-
 		else:
-			source = ["<", source]
+			command.extend(["cat", source, "|"])
 
+		# Newer versions of MariaDB add in a line that'll break on older versions, so remove it
+		command.extend(["sed", r"'/\/\*M\{0,1\}!999999\\- enable the sandbox mode \*\//d'", "|"])
+
+		# Remove view security definers
+		command.extend(["sed", r"'/\/\*![0-9]* DEFINER=[^ ]* SQL SECURITY DEFINER \*\//d'", "|"])
+
+		# Generate the restore command
 		bin, args, bin_name = get_command(
+			socket=frappe.conf.db_socket,
 			host=frappe.conf.db_host,
 			port=frappe.conf.db_port,
 			user=user,
@@ -77,12 +94,12 @@ class DbManager:
 			db_name=target,
 		)
 		if not bin:
-			frappe.throw(
+			return frappe.throw(
 				_("{} not found in PATH! This is required to restore the database.").format(bin_name),
 				exc=frappe.ExecutableNotFound,
 			)
 		command.append(bin)
 		command.append(shlex.join(args))
-		command.extend(source)
+
 		execute_in_shell(" ".join(command), check_exit_code=True, verbose=verbose)
 		frappe.cache.delete_keys("")  # Delete all keys associated with this site.

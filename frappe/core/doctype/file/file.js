@@ -1,5 +1,10 @@
 frappe.ui.form.on("File", {
 	refresh: function (frm) {
+		frm.add_custom_button(__("View File"), () => {
+			if (!frappe.utils.is_url(frm.doc.file_url)) {
+				window.open(window.location.origin + frm.doc.file_url);
+			}
+		});
 		if (!frm.doc.is_folder) {
 			// add download button
 			frm.add_custom_button(__("Download"), () => frm.trigger("download"), "fa fa-download");
@@ -82,7 +87,16 @@ frappe.ui.form.on("File", {
 		if (frm.doc.file_name) {
 			file_url = file_url.replace(/#/g, "%23");
 		}
-		window.open(file_url);
+
+		// create temporary link element to simulate a download click
+		var link = document.createElement("a");
+		link.href = file_url;
+		link.download = frm.doc.file_name;
+		link.style.display = "none";
+
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
 	},
 
 	optimize: function (frm) {

@@ -4,22 +4,22 @@ import frappe
 from frappe.core.page.permission_manager.permission_manager import add, reset, update
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.desk.form.load import get_docinfo, getdoc, getdoctype
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils.file_manager import save_file
 
-test_dependencies = ["Blog Category", "Blogger"]
+EXTRA_TEST_RECORD_DEPENDENCIES = ["Blog Category", "Blogger"]
 
 
-class TestFormLoad(FrappeTestCase):
+class TestFormLoad(IntegrationTestCase):
 	def test_load(self):
 		getdoctype("DocType")
-		meta = list(filter(lambda d: d.name == "DocType", frappe.response.docs))[0]
+		meta = next(filter(lambda d: d.name == "DocType", frappe.response.docs))
 		self.assertEqual(meta.name, "DocType")
 		self.assertTrue(meta.get("__js"))
 
 		frappe.response.docs = []
 		getdoctype("Event")
-		meta = list(filter(lambda d: d.name == "Event", frappe.response.docs))[0]
+		meta = next(filter(lambda d: d.name == "Event", frappe.response.docs))
 		self.assertTrue(meta.get("__calendar_js"))
 
 	def test_fieldlevel_permissions_in_load(self):

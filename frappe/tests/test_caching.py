@@ -2,8 +2,9 @@ import time
 from unittest.mock import MagicMock
 
 import frappe
+from frappe.core.doctype.doctype.test_doctype import new_doctype
+from frappe.tests import IntegrationTestCase
 from frappe.tests.test_api import FrappeAPITestCase
-from frappe.tests.utils import FrappeTestCase
 from frappe.utils.caching import redis_cache, request_cache, site_cache
 
 CACHE_TTL = 4
@@ -15,7 +16,7 @@ register_with_external_service = MagicMock(return_value=True)
 def request_specific_api(a: list | tuple | dict | int, b: int) -> int:
 	# API that takes very long to return a result
 	todays_value = external_service()
-	if not isinstance(a, (int, float)):
+	if not isinstance(a, int | float):
 		a = 1
 	return a**b * todays_value
 
@@ -34,7 +35,7 @@ def ping_with_ttl() -> str:
 	return frappe.local.site
 
 
-class TestCachingUtils(FrappeTestCase):
+class TestCachingUtils(IntegrationTestCase):
 	def test_request_cache(self):
 		retval = []
 		acceptable_args = [
@@ -44,7 +45,9 @@ class TestCachingUtils(FrappeTestCase):
 			frappe.get_last_doc("DocType"),
 			frappe._dict(),
 		]
-		same_output_received = lambda: all([x for x in set(retval) if x == retval[0]])
+
+		def same_output_received():
+			return all([x for x in set(retval) if x == retval[0]])
 
 		# ensure that external service was called only once
 		# thereby return value of request_specific_api is cached
@@ -107,6 +110,7 @@ class TestRedisCache(FrappeAPITestCase):
 		self.assertEqual(function_call_count, 1)
 
 		time.sleep(CACHE_TTL * 1.5)
+		frappe.local.cache.clear()
 		self.assertEqual(calculate_area(10), 314)
 		self.assertEqual(function_call_count, 2)
 
@@ -182,6 +186,34 @@ class TestRedisCache(FrappeAPITestCase):
 		calculate_area(10)
 		self.assertEqual(function_call_count, 2)
 
+	def test_user_cache(self):
+		function_call_count = 0
+		PI = 3.1415
+		ENGINEERING_PI = _E = 3
+
+		@redis_cache(user=True)
+		def calculate_area(radius: float) -> float:
+			nonlocal function_call_count
+			PI_APPROX = ENGINEERING_PI if frappe.session.user == "Engineer" else PI
+			function_call_count += 1
+			return PI_APPROX * radius**2
+
+		with self.set_user("Engineer"):
+			self.assertEqual(calculate_area(1), ENGINEERING_PI)
+			self.assertEqual(function_call_count, 1)
+
+		with self.set_user("Mathematician"):
+			self.assertEqual(calculate_area(1), PI)
+			self.assertEqual(function_call_count, 2)
+
+		with self.set_user("Engineer"):
+			self.assertEqual(calculate_area(1), ENGINEERING_PI)
+			self.assertEqual(function_call_count, 2)
+
+		with self.set_user("Mathematician"):
+			self.assertEqual(calculate_area(1), PI)
+			self.assertEqual(function_call_count, 2)
+
 
 class TestDocumentCache(FrappeAPITestCase):
 	TEST_DOCTYPE = "User"
@@ -192,7 +224,7 @@ class TestDocumentCache(FrappeAPITestCase):
 		self.test_value = frappe.generate_hash()
 
 	def test_caching(self):
-		doc = frappe.get_cached_doc(self.TEST_DOCTYPE, self.TEST_DOCNAME)
+		frappe.get_cached_doc(self.TEST_DOCTYPE, self.TEST_DOCNAME)
 
 		with self.assertQueryCount(0):
 			doc = frappe.get_cached_doc(self.TEST_DOCTYPE, self.TEST_DOCNAME)
@@ -232,7 +264,6 @@ class TestDocumentCache(FrappeAPITestCase):
 
 class TestRedisWrapper(FrappeAPITestCase):
 	def test_delete_keys(self):
-
 		prefix = "test_del_"
 
 		for i in range(5):
@@ -242,5 +273,89 @@ class TestRedisWrapper(FrappeAPITestCase):
 		frappe.cache.delete_keys(prefix)
 		self.assertEqual(len(frappe.cache.get_keys(prefix)), 0)
 
+	def test_hash(self):
+		key = "test_hash"
+
+		# Confirm that there's no data initially
+		exists = frappe.cache.exists(key)
+		self.assertFalse(exists)
+
+		# Insert 5 key-value pairs
+		for i in range(5):
+			frappe.cache.hset(key, f"key_{i}", f"value_{i}")
+
+		# Check that we have 5 values
+		values = frappe.cache.hgetall(key)
+		self.assertEqual(len(values), 5)
+
+		# Check that each value matches
+		for i in range(5):
+			value = frappe.cache.hget(key, f"key_{i}")
+			self.assertEqual(value, f"value_{i}")
+
+		# Check the keys themselves
+		keys = frappe.cache.hkeys(key)
+		for i in range(5):
+			self.assertIn(f"key_{i}".encode(), keys)
+
+		# Delete a single key and check that we still have the remaining 4
+		frappe.cache.hdel(key, "key_1")
+		values = frappe.cache.hgetall(key)
+		self.assertEqual(len(values), 4)
+
+		# Delete 2 keys and check that we still have the remaining 2
+		frappe.cache.hdel(key, ["key_2", "key_3"])
+		values = frappe.cache.hgetall(key)
+		self.assertEqual(len(values), 2)
+
+		# Delete the hash itself and confirm that there's no data
+		frappe.cache.delete_value(key)
+		exists = frappe.cache.exists(key)
+		self.assertFalse(exists)
+
+	def test_user_cache_clear(self):
+		from frappe.cache_manager import user_cache_keys
+
+		# Set some keys that a user's cache would usually have
+		user1 = frappe.utils.random_string(10)
+		user2 = frappe.utils.random_string(10)
+		for key in user_cache_keys:
+			frappe.cache.hset(key, user1, key)
+			frappe.cache.hset(key, user2, key)
+
+		frappe.clear_cache(user=user1)
+
+		# Check that the keys for user1 are gone
+		for key in set(user_cache_keys) - {"home_page"}:
+			self.assertFalse(frappe.cache.hexists(key, user1))
+			self.assertTrue(frappe.cache.hexists(key, user2))
+
+	def test_doctype_cache_clear(self):
+		from frappe.cache_manager import doctype_cache_keys
+
+		# Set some keys that a user's cache would usually have
+		doctype1 = new_doctype(frappe.utils.random_string(10))
+		doctype2 = new_doctype(frappe.utils.random_string(10))
+		for key in doctype_cache_keys:
+			frappe.cache.hset(key, doctype1.name, key)
+			frappe.cache.hset(key, doctype2.name, key)
+
+		frappe.clear_cache(doctype=doctype1.name)
+
+		# Check that the keys for doctype1 are gone
+		for key in doctype_cache_keys:
+			self.assertFalse(frappe.cache.hexists(key, doctype1.name))
+			self.assertTrue(frappe.cache.hexists(key, doctype2.name))
+
 	def test_backward_compat_cache(self):
 		self.assertEqual(frappe.cache, frappe.cache())
+
+
+class TestHttpCache(FrappeAPITestCase):
+	def test_http_headers(self):
+		resp = self.get(
+			self.method("frappe.client.is_document_amended"),
+			{"sid": self.sid, "doctype": "User", "docname": "Guest"},
+		)
+		self.assertEqual(resp.cache_control.max_age, 600)
+		self.assertTrue(resp.cache_control.private)

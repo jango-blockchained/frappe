@@ -8,13 +8,13 @@ import sqlparse
 import frappe
 import frappe.recorder
 from frappe.recorder import normalize_query
-from frappe.tests.utils import FrappeTestCase, timeout
+from frappe.tests import IntegrationTestCase, timeout
 from frappe.utils import set_request
 from frappe.utils.doctor import any_job_pending
 from frappe.website.serve import get_response_content
 
 
-class TestRecorder(FrappeTestCase):
+class TestRecorder(IntegrationTestCase):
 	def setUp(self):
 		self.wait_for_background_jobs()
 		frappe.recorder.stop()
@@ -83,6 +83,7 @@ class TestRecorder(FrappeTestCase):
 	def test_explain(self):
 		frappe.db.sql("SELECT * FROM tabDocType")
 		frappe.db.sql("COMMIT")
+		frappe.db.sql("select 1", run=0)
 		self.stop_recording()
 
 		requests = frappe.recorder.get()
@@ -109,7 +110,7 @@ class TestRecorder(FrappeTestCase):
 
 		self.assertEqual(len(request["calls"]), len(queries))
 
-		for query, call in zip(queries, request["calls"]):
+		for query, call in zip(queries, request["calls"], strict=False):
 			self.assertEqual(
 				call["query"],
 				sqlparse.format(
@@ -134,7 +135,7 @@ class TestRecorder(FrappeTestCase):
 		requests = frappe.recorder.get()
 		request = frappe.recorder.get(requests[0]["uuid"])
 
-		for query, call in zip(queries, request["calls"]):
+		for query, call in zip(queries, request["calls"], strict=False):
 			self.assertEqual(call["exact_copies"], query[1])
 
 	def test_error_page_rendering(self):
@@ -142,7 +143,7 @@ class TestRecorder(FrappeTestCase):
 		self.assertIn("Error", content)
 
 
-class TestRecorderDeco(FrappeTestCase):
+class TestRecorderDeco(IntegrationTestCase):
 	def test_recorder_flag(self):
 		frappe.recorder.delete()
 
@@ -154,7 +155,7 @@ class TestRecorderDeco(FrappeTestCase):
 		self.assertTrue(frappe.recorder.get())
 
 
-class TestQueryNormalization(FrappeTestCase):
+class TestQueryNormalization(IntegrationTestCase):
 	def test_query_normalization(self):
 		test_cases = {
 			"select * from user where name = 'x'": "select * from user where name = ?",

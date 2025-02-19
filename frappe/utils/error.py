@@ -8,6 +8,7 @@ from collections import Counter
 from contextlib import suppress
 
 import frappe
+from frappe.monitor import add_data_to_monitor
 
 EXCLUDE_EXCEPTIONS = (
 	frappe.AuthenticationError,
@@ -33,9 +34,7 @@ def _is_ldap_exception(e):
 	return False
 
 
-def log_error(
-	title=None, message=None, reference_doctype=None, reference_name=None, *, defer_insert=False
-):
+def log_error(title=None, message=None, reference_doctype=None, reference_name=None, *, defer_insert=False):
 	"""Log error to Error Log"""
 	from frappe.monitor import get_trace_id
 	from frappe.utils.sentry import capture_exception
@@ -79,7 +78,6 @@ def log_error(
 
 
 def log_error_snapshot(exception: Exception):
-
 	if isinstance(exception, EXCLUDE_EXCEPTIONS) or _is_ldap_exception(exception):
 		return
 
@@ -88,6 +86,7 @@ def log_error_snapshot(exception: Exception):
 	try:
 		log_error(title=str(exception), defer_insert=True)
 		logger.error("New Exception collected in error log")
+		add_data_to_monitor(exception=exception.__class__.__name__)
 	except Exception as e:
 		logger.error(f"Could not take error snapshot: {e}", exc_info=True)
 
@@ -95,15 +94,11 @@ def log_error_snapshot(exception: Exception):
 def get_default_args(func):
 	"""Get default arguments of a function from its signature."""
 	signature = inspect.signature(func)
-	return {
-		k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty
-	}
+	return {k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty}
 
 
 def raise_error_on_no_output(error_message, error_type=None, keep_quiet=None):
 	"""Decorate any function to throw error incase of missing output.
-
-	TODO: Remove keep_quiet flag after testing and fixing sendmail flow.
 
 	:param error_message: error message to raise
 	:param error_type: type of error to raise
@@ -112,11 +107,22 @@ def raise_error_on_no_output(error_message, error_type=None, keep_quiet=None):
 	:type error_type: Exception Class
 	:type keep_quiet: function
 
-	>>> @raise_error_on_no_output("Ingradients missing")
-	... def get_indradients(_raise_error=1): return
-	...
-	>>> get_ingradients()
-	`Exception Name`: Ingradients missing
+	---
+	Example:
+
+	```py
+	@raise_error_on_no_output("Ingredients are missing")
+	def get_ingredients(_raise_error=1):
+	    return
+
+
+	# this will raise an Exception with message "Ingredients are missing"
+	ingredients = get_ingredients()
+	```
+
+	---
+
+	TODO: Remove keep_quiet flag after testing and fixing sendmail flow.
 	"""
 
 	def decorator_raise_error_on_no_output(func):

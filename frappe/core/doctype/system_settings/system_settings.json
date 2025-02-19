@@ -11,6 +11,7 @@
   "language",
   "column_break_3",
   "time_zone",
+  "currency",
   "enable_onboarding",
   "setup_complete",
   "disable_document_sharing",
@@ -18,6 +19,7 @@
   "date_format",
   "time_format",
   "number_format",
+  "use_number_format_from_currency",
   "first_day_of_the_week",
   "column_break_7",
   "float_precision",
@@ -40,6 +42,7 @@
   "column_break_uhqk",
   "login_with_email_link",
   "login_with_email_link_expiry",
+  "rate_limit_email_link_login",
   "brute_force_security",
   "allow_consecutive_login_attempts",
   "column_break_34",
@@ -68,6 +71,7 @@
   "disable_standard_email_footer",
   "hide_footer_in_auto_email_reports",
   "attach_view_link",
+  "store_attached_pdf_document",
   "welcome_email_template",
   "reset_password_template",
   "files_tab",
@@ -78,10 +82,13 @@
   "strip_exif_metadata_from_uploaded_images",
   "column_break_uqma",
   "allowed_file_extensions",
+  "app_tab",
+  "default_app",
   "updates_tab",
   "system_updates_section",
   "disable_system_update_notification",
   "disable_change_log_notification",
+  "hide_empty_read_only_fields",
   "backups_tab",
   "sec_backup_limit",
   "backup_limit",
@@ -94,7 +101,9 @@
   "dormant_days",
   "telemetry_section",
   "allow_error_traceback",
-  "enable_telemetry"
+  "enable_telemetry",
+  "search_section",
+  "link_field_results_limit"
  ],
  "fields": [
   {
@@ -605,7 +614,7 @@
   {
    "fieldname": "updates_tab",
    "fieldtype": "Tab Break",
-   "label": "Updates"
+   "label": "Display"
   },
   {
    "fieldname": "backups_tab",
@@ -634,12 +643,68 @@
   {
    "fieldname": "column_break_uhqk",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "search_section",
+   "fieldtype": "Section Break",
+   "label": "Search"
+  },
+  {
+   "default": "10",
+   "fieldname": "link_field_results_limit",
+   "fieldtype": "Int",
+   "label": "Link Field Results Limit",
+   "non_negative": 1
+  },
+  {
+   "default": "1",
+   "description": "When sending document using email, store the PDF on Communication. Warning: This can increase your storage usage.",
+   "fieldname": "store_attached_pdf_document",
+   "fieldtype": "Check",
+   "label": "Store Attached PDF Document"
+  },
+  {
+   "fieldname": "app_tab",
+   "fieldtype": "Tab Break",
+   "label": "App"
+  },
+  {
+   "description": "Redirect to the selected app after login",
+   "fieldname": "default_app",
+   "fieldtype": "Select",
+   "label": "Default App"
+  },
+  {
+   "depends_on": "login_with_email_link",
+   "description": "You can set a high value here if multiple users will be logging in from the same network.",
+   "fieldname": "rate_limit_email_link_login",
+   "fieldtype": "Int",
+   "label": "Rate limit for email link login"
+  },
+  {
+   "default": "0",
+   "fieldname": "use_number_format_from_currency",
+   "fieldtype": "Check",
+   "label": "Use Number Format from Currency"
+  },
+  {
+   "description": "Default display currency",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency"
+  },
+  {
+   "default": "1",
+   "fieldname": "hide_empty_read_only_fields",
+   "fieldtype": "Check",
+   "label": "Hide Empty Read-Only Fields"
   }
  ],
  "icon": "fa fa-cog",
  "issingle": 1,
  "links": [],
- "modified": "2023-12-08 15:52:37.525003",
+ "modified": "2024-12-03 16:23:09.410614",
  "modified_by": "Administrator",
  "module": "Core",
  "name": "System Settings",
@@ -654,7 +719,7 @@
   }
  ],
  "quick_entry": 1,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

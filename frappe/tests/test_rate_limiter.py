@@ -8,11 +8,11 @@ from werkzeug.wrappers import Response
 import frappe
 import frappe.rate_limiter
 from frappe.rate_limiter import RateLimiter
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 from frappe.utils import cint
 
 
-class TestRateLimiter(FrappeTestCase):
+class TestRateLimiter(IntegrationTestCase):
 	def test_apply_with_limit(self):
 		frappe.conf.rate_limit = {"window": 86400, "limit": 1}
 		frappe.rate_limiter.apply()
@@ -45,7 +45,6 @@ class TestRateLimiter(FrappeTestCase):
 
 		headers = frappe.local.rate_limiter.headers()
 		self.assertIn("Retry-After", headers)
-		self.assertNotIn("X-RateLimit-Used", headers)
 		self.assertIn("X-RateLimit-Reset", headers)
 		self.assertIn("X-RateLimit-Limit", headers)
 		self.assertIn("X-RateLimit-Remaining", headers)
@@ -75,7 +74,6 @@ class TestRateLimiter(FrappeTestCase):
 		self.assertNotIn("Retry-After", headers)
 		self.assertIn("X-RateLimit-Reset", headers)
 		self.assertTrue(int(headers["X-RateLimit-Reset"] < 86400))
-		self.assertEqual(int(headers["X-RateLimit-Used"]), frappe.local.rate_limiter.duration)
 		self.assertEqual(int(headers["X-RateLimit-Limit"]), 10000)
 		self.assertEqual(int(headers["X-RateLimit-Remaining"]), 10000)
 
@@ -109,4 +107,13 @@ class TestRateLimiter(FrappeTestCase):
 
 		self.assertEqual(limiter.duration, cint(frappe.cache.get(limiter.key)))
 
+		frappe.cache.delete(limiter.key)
+
+	def test_window_expires(self):
+		limiter = RateLimiter(1000, 1)
+		self.assertTrue(frappe.cache.exists(limiter.key, shared=True))
+		limiter.update()
+		self.assertTrue(frappe.cache.exists(limiter.key, shared=True))
+		time.sleep(1.1)
+		self.assertFalse(frappe.cache.exists(limiter.key, shared=True))
 		frappe.cache.delete(limiter.key)

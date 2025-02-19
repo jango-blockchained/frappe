@@ -13,8 +13,10 @@ frappe.ui.Dialog = class Dialog extends frappe.ui.FieldGroup {
 		this.display = false;
 		this.is_dialog = true;
 
-		$.extend(this, { animate: true, size: null }, opts);
-		this.make();
+		$.extend(this, { animate: true, size: null, auto_make: true }, opts);
+		if (this.auto_make) {
+			this.make();
+		}
 	}
 
 	make() {
@@ -160,6 +162,20 @@ frappe.ui.Dialog = class Dialog extends frappe.ui.FieldGroup {
 		return this.$wrapper.find(".modal-header .btn-modal-minimize");
 	}
 
+	set_alert(text, alert_class = "info") {
+		this.clear_alert();
+		this.$alert = $(`<div class="alert alert-${alert_class}">${text}</div>`).prependTo(
+			this.body
+		);
+		this.$message.text(text);
+	}
+
+	clear_alert() {
+		if (this.$alert) {
+			this.$alert.remove();
+		}
+	}
+
 	set_message(text) {
 		this.$message.removeClass("hide");
 		this.$body.addClass("hide");
@@ -254,10 +270,6 @@ frappe.ui.Dialog = class Dialog extends frappe.ui.FieldGroup {
 	}
 
 	hide() {
-		if (this.animate && this.animation_speed === "slow") {
-			this.$wrapper.addClass("slow");
-			$(".modal-backdrop").addClass("slow");
-		}
 		this.$wrapper.modal("hide");
 		this.is_visible = false;
 	}
@@ -305,6 +317,8 @@ frappe.ui.Dialog = class Dialog extends frappe.ui.FieldGroup {
 
 		action && action_button.click(action);
 	}
+
+	add_custom_button() {}
 };
 
 frappe.ui.hide_open_dialog = () => {

@@ -24,6 +24,13 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 			const doctype = grid.doctype;
 			const row_docname = $(e.target).closest(".grid-row").data("name");
 			const in_grid_form = $(e.target).closest(".form-in-grid").length;
+			const value_formatter_map = {
+				Date: (val) => (val ? frappe.datetime.user_to_str(val) : val),
+				Int: (val) => cint(val),
+				Check: (val) => cint(val),
+				Float: (val) => flt(val),
+				Currency: (val) => flt(val),
+			};
 
 			let pasted_data = frappe.utils.get_clipboard_data(e);
 
@@ -34,10 +41,13 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 			if (data.length === 1 && data[0].length === 1) return;
 
 			let fieldnames = [];
+			let fieldtypes = [];
 			// for raw data with column header
 			if (this.get_field(data[0][0])) {
 				data[0].forEach((column) => {
 					fieldnames.push(this.get_field(column));
+					const df = frappe.meta.get_docfield(doctype, this.get_field(column));
+					fieldtypes.push(df ? df.fieldtype : "");
 				});
 				data.shift();
 			} else {
@@ -51,6 +61,8 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 						column.fieldname === $(e.target).data("fieldname")
 					) {
 						fieldnames.push(column.fieldname);
+						const df = frappe.meta.get_docfield(doctype, column.fieldname);
+						fieldtypes.push(df ? df.fieldtype : "");
 						target_column_matched = true;
 					}
 				});
@@ -73,6 +85,10 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 						const row_name = grid_rows[row_idx - 1].doc.name;
 						row.forEach((value, data_index) => {
 							if (fieldnames[data_index]) {
+								// format value before setting
+								value = value_formatter_map[fieldtypes[data_index]]
+									? value_formatter_map[fieldtypes[data_index]](value)
+									: value;
 								frappe.model.set_value(
 									doctype,
 									row_name,
@@ -101,7 +117,7 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 	get_field(field_name) {
 		let fieldname;
 		field_name = field_name.toLowerCase();
-		this.grid.meta.fields.some((field) => {
+		this.grid?.meta?.fields.some((field) => {
 			if (frappe.model.no_value_type.includes(field.fieldtype)) {
 				return false;
 			}
@@ -110,7 +126,7 @@ frappe.ui.form.ControlTable = class ControlTable extends frappe.ui.form.Control 
 				return (
 					field.fieldname.toLowerCase() === field_name ||
 					(field.label || "").toLowerCase() === field_name ||
-					(__(field.label) || "").toLowerCase() === field_name
+					(__(field.label, null, field.parent) || "").toLowerCase() === field_name
 				);
 			};
 

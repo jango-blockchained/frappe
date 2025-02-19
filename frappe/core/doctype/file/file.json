@@ -107,6 +107,7 @@
    "fieldtype": "Link",
    "hidden": 1,
    "label": "Folder",
+   "length": 255,
    "options": "File",
    "read_only": 1
   },
@@ -189,7 +190,7 @@
  "icon": "fa fa-file",
  "idx": 1,
  "links": [],
- "modified": "2023-12-08 15:52:37.525003",
+ "modified": "2025-01-15 11:46:42.917146",
  "modified_by": "Administrator",
  "module": "Core",
  "name": "File",
@@ -216,7 +217,7 @@
    "write": 1
   }
  ],
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "title_field": "file_name",

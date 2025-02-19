@@ -52,34 +52,41 @@
 
 			.layout-main-section-wrapper {
 				flex: 1;
-				max-width: 100%;
 			}
 		}
 	}
 }
 
 .list-row-container {
-	border-bottom: 1px solid $border-color;
 	display: flex;
 	flex-direction: column;
-	outline: none;
-	padding: 4px 5px;
+	padding: var(--padding-xs) var(--padding-md);
+	border-bottom: 1px solid $border-color;
 
 	&:focus {
 		.list-row {
 			background-color: var(--highlight-color);
 		}
 	}
+
+	&:first-child {
+		padding-top: 0;
+		border-bottom: none;
+	}
+
+	&:last-child {
+		border-bottom: none;
+	}
 }
 
 .list-row {
-	padding: 15px 15px 15px 0px;
-	height: 38px;
+	padding-right: 15px;
+	height: var(--list-row-height);
+	border-radius: var(--border-radius);
 	cursor: pointer;
 	transition: color 0.2s;
 	-webkit-transition: color 0.2s;
 	@include get_textstyle("base", "regular");
-	border-radius: var(--border-radius-md);
 
 	&:hover:not(.list-row-head) {
 		background-color: var(--highlight-color);
@@ -149,24 +156,23 @@
 		}
 	}
 
-	.select-like,
 	.file-select {
 		padding-left: 11px;
 	}
+}
+
+.select-like {
+	padding: var(--list-checkbox-padding);
+	cursor: default;
 }
 
 .list-row-head {
 	@extend .list-row;
 	cursor: default;
 	background-color: var(--subtle-fg);
-	height: 30px;
-	padding: 8px, 10px, 8px, 0px;
-	margin: 8px 5px 0px 5px;
-	border-radius: var(--border-radius-md);
+	border-radius: var(--border-radius);
+	height: var(--list-row-height);
 
-	.list-check-all {
-		margin-left: 11px;
-	}
 	.list-subject {
 		font-weight: normal;
 	}
@@ -222,14 +228,14 @@ $level-margin-right: 8px;
 		}
 	}
 	.btn-paging {
-		background-color: var(--gray-50);
+		background-color: var(--control-bg);
 	}
 }
 
-.frappe-card {
+.layout-main-list {
 	.list-paging-area,
 	.footnote-area {
-		padding: var(--padding-md);
+		padding: var(--padding-sm) var(--padding-md);
 	}
 }
 
@@ -237,23 +243,26 @@ $level-margin-right: 8px;
 	height: 10px;
 }
 
-.likes-count {
-	display: none;
-}
-
 .list-liked-by-me {
 	margin-bottom: 1px;
 }
 
-input.list-check-all,
-input.list-row-checkbox {
-	margin-top: 0px;
-	margin-bottom: 0px;
-	--checkbox-right-margin: calc(var(--checkbox-size) / 2 + #{$level-margin-right});
-}
+input.list-row-checkbox,
+input.list-header-checkbox {
+	margin-top: 0;
+	margin-bottom: 0;
+	--checkbox-right-margin: 0;
+	background-color: var(--card-bg);
+	z-index: 1;
 
-input.list-check-all {
-	margin-left: 15px;
+	&::after {
+		// Extend the checkbox's clickable area
+		display: block;
+		content: "";
+		inset: calc(-1 * var(--list-checkbox-padding));
+		position: absolute;
+		opacity: 0;
+	}
 }
 
 .render-list-checkbox {
@@ -299,7 +308,7 @@ input.list-check-all {
 	align-items: center;
 	cursor: pointer;
 
-	height: 40px;
+	height: var(--list-row-height);
 	padding-left: 15px;
 
 	@include get_textstyle("base", "regular");
@@ -318,7 +327,7 @@ input.list-check-all {
 
 	&--head {
 		background-color: var(--highlight-color);
-		border-bottom: 1px solid $border-color;
+		// border-bottom: 1px solid $border-color;
 		cursor: auto;
 	}
 

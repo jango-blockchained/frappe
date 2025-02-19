@@ -97,7 +97,7 @@ frappe.ui.form.Layout = class Layout {
 		return fields;
 	}
 
-	show_message(html, color) {
+	show_message(html, color, permanent = false) {
 		if (this.message_color) {
 			// remove previous color
 			this.message.removeClass(this.message_color);
@@ -112,8 +112,10 @@ frappe.ui.form.Layout = class Layout {
 			}
 			this.message.removeClass("hidden").addClass(this.message_color);
 			$(html).appendTo(this.message);
-			close_message.appendTo(this.message);
-			close_message.on("click", () => this.message.empty().addClass("hidden"));
+			if (!permanent) {
+				close_message.appendTo(this.message);
+				close_message.on("click", () => this.message.empty().addClass("hidden"));
+			}
 		} else {
 			this.message.empty().addClass("hidden");
 		}
@@ -212,6 +214,10 @@ frappe.ui.form.Layout = class Layout {
 
 		const parent = this.column.form.get(0);
 		const fieldobj = this.init_field(df, parent, render);
+
+		// An invalid control name will return in a null fieldobj
+		if (!fieldobj) return;
+
 		this.fields_list.push(fieldobj);
 		this.fields_dict[df.fieldname] = fieldobj;
 
@@ -234,7 +240,11 @@ frappe.ui.form.Layout = class Layout {
 			layout: this,
 		});
 
-		fieldobj.layout = this;
+		// make_control can return null for invalid control names
+		if (fieldobj) {
+			fieldobj.layout = this;
+		}
+
 		return fieldobj;
 	}
 
@@ -405,7 +415,15 @@ frappe.ui.form.Layout = class Layout {
 	}
 
 	set_tab_as_active() {
-		let frm_active_tab = this?.frm.get_active_tab?.();
+		// Set active tab based on hash
+		const tab_from_hash = window.location.hash.replace("#", "");
+		const tab = this.tabs.find((tab) => tab.df.fieldname === tab_from_hash);
+		if (tab) {
+			tab.set_active();
+			return;
+		}
+
+		let frm_active_tab = this.frm?.get_active_tab?.();
 		if (frm_active_tab) {
 			frm_active_tab.set_active();
 		} else if (this.tabs.length) {
@@ -485,7 +503,7 @@ frappe.ui.form.Layout = class Layout {
 		let tabs_content = this.tabs_content[0];
 		if (!tabs_list.length) return;
 
-		$(window).scroll(
+		$(".main-section").scroll(
 			frappe.utils.throttle(() => {
 				let current_scroll = document.documentElement.scrollTop;
 				if (current_scroll > 0 && last_scroll <= current_scroll) {
@@ -621,7 +639,10 @@ frappe.ui.form.Layout = class Layout {
 					// show grid row (if exists)
 					field.grid.grid_rows[0].show_form();
 					return true;
-				} else if (!frappe.model.no_value_type.includes(field.df.fieldtype)) {
+				} else if (
+					field.df.fieldtype === "Table MultiSelect" ||
+					!frappe.model.no_value_type.includes(field.df.fieldtype)
+				) {
 					this.set_focus(field);
 					return true;
 				}
